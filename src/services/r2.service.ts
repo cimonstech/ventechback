@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // Initialize R2 Client (S3-compatible)
@@ -188,6 +188,74 @@ export const getSignedUrlForR2 = async (
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate URL',
+    };
+  }
+};
+
+/**
+ * List all files in R2 bucket (or a specific folder)
+ */
+export const listR2Files = async (
+  folder?: string,
+  maxKeys: number = 1000
+): Promise<{ success: boolean; files?: Array<{ key: string; url: string; size?: number; lastModified?: Date }>; error?: string }> => {
+  try {
+    let prefix = '';
+    if (folder) {
+      prefix = folder.endsWith('/') ? folder : `${folder}/`;
+    }
+
+    const command = new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      Prefix: prefix,
+      MaxKeys: maxKeys,
+    });
+
+    const response = await r2Client.send(command);
+
+    if (!response.Contents) {
+      return {
+        success: true,
+        files: [],
+      };
+    }
+
+    // Generate public URLs for each file
+    const accountId = process.env.R2_ACCOUNT_ID;
+    const files = response.Contents
+      .filter(item => item.Key && !item.Key.endsWith('/')) // Exclude folders
+      .map(item => {
+        let publicUrl: string;
+        
+        if (PUBLIC_URL && !PUBLIC_URL.includes('.r2.cloudflarestorage.com')) {
+          if (PUBLIC_URL.includes('.r2.dev')) {
+            const baseUrl = PUBLIC_URL.endsWith('/') ? PUBLIC_URL.slice(0, -1) : PUBLIC_URL;
+            publicUrl = `${baseUrl}/${BUCKET_NAME}/${item.Key}`;
+          } else {
+            const baseUrl = PUBLIC_URL.endsWith('/') ? PUBLIC_URL.slice(0, -1) : PUBLIC_URL;
+            publicUrl = `${baseUrl}/${item.Key}`;
+          }
+        } else {
+          publicUrl = `https://${accountId}.r2.dev/${BUCKET_NAME}/${item.Key}`;
+        }
+
+        return {
+          key: item.Key!,
+          url: publicUrl,
+          size: item.Size,
+          lastModified: item.LastModified,
+        };
+      });
+
+    return {
+      success: true,
+      files,
+    };
+  } catch (error) {
+    console.error('Error listing R2 files:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to list files',
     };
   }
 };

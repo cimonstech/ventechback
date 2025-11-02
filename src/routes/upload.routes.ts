@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { uploadSingle, uploadMultiple } from '../middleware/upload.middleware';
-import { uploadToR2, uploadMultipleToR2, deleteFromR2 } from '../services/r2.service';
+import { uploadToR2, uploadMultipleToR2, deleteFromR2, listR2Files } from '../services/r2.service';
 
 const router = Router();
 
@@ -129,6 +129,38 @@ router.post('/multiple', uploadMultiple, async (req: Request, res: Response) => 
     return res.status(500).json({
       success: false,
       error: 'Failed to upload files',
+    });
+  }
+});
+
+/**
+ * GET /api/upload/list
+ * List all files in R2 (optionally filtered by folder)
+ */
+router.get('/list', async (req: Request, res: Response) => {
+  try {
+    const folder = req.query.folder as string | undefined;
+    const maxKeys = parseInt(req.query.maxKeys as string) || 1000;
+
+    const result = await listR2Files(folder, maxKeys);
+
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        files: result.files,
+        count: result.files?.length || 0,
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    console.error('List files error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to list files',
     });
   }
 });
