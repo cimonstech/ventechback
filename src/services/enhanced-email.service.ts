@@ -259,12 +259,15 @@ class EnhancedEmailService {
     if (!address) return 'No address provided';
     
     const parts = [
-      address.street,
+      address.street_address || address.street,
       address.city,
       address.region,
       address.postal_code,
-      address.country
+      address.country || 'Ghana'
     ].filter(Boolean);
+    
+    if (address.full_name) parts.unshift(address.full_name);
+    if (address.phone) parts.push(`Phone: ${address.phone}`);
     
     return parts.join(', ');
   }
@@ -272,14 +275,91 @@ class EnhancedEmailService {
   private formatOrderItems(items: any[]): string {
     if (!items || items.length === 0) return 'No items';
     
-    return items.map(item => 
-      `<tr>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.product_name}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.quantity}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${item.price.toFixed(2)}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${(item.price * item.quantity).toFixed(2)}</td>
-      </tr>`
-    ).join('');
+    return items.map(item => {
+      const unitPrice = item.unit_price || item.price || 0;
+      const subtotal = item.subtotal || (unitPrice * (item.quantity || 0));
+      return `<tr>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.product_name || 'Product'}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.quantity || 0}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${unitPrice.toFixed(2)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${subtotal.toFixed(2)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Send admin order notification email
+  async sendAdminOrderNotification(orderData: any): Promise<{ success: boolean; reason?: string }> {
+    try {
+      const templatePath = path.join(__dirname, '../../email-templates/admin-order-notification.html');
+      
+      // Check if template exists, otherwise create inline template
+      let template: string;
+      if (fs.existsSync(templatePath)) {
+        template = fs.readFileSync(templatePath, 'utf8');
+      } else {
+        // Inline template for admin notification
+        template = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background: #FF7A19; color: white; padding: 20px; text-align: center; }
+              .content { background: #f9f9f9; padding: 20px; }
+              .order-info { background: white; padding: 15px; margin: 15px 0; border-left: 4px solid #FF7A19; }
+              .item { padding: 10px; border-bottom: 1px solid #eee; }
+              .total { font-size: 18px; font-weight: bold; color: #FF7A19; margin-top: 20px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>New Order Received</h1>
+              </div>
+              <div class="content">
+                <div class="order-info">
+                  <h2>Order #{{ORDER_NUMBER}}</h2>
+                  <p><strong>Customer:</strong> {{CUSTOMER_NAME}}</p>
+                  <p><strong>Email:</strong> {{CUSTOMER_EMAIL}}</p>
+                  <p><strong>Date:</strong> {{ORDER_DATE}}</p>
+                  <p><strong>Total:</strong> GHS {{TOTAL_AMOUNT}}</p>
+                </div>
+                <h3>Order Items:</h3>
+                {{ITEMS_LIST}}
+                <div class="total">
+                  Total Amount: GHS {{TOTAL_AMOUNT}}
+                </div>
+                <p><strong>Delivery Address:</strong></p>
+                <p>{{DELIVERY_ADDRESS}}</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
+      }
+
+      // Replace placeholders
+      template = template
+        .replace(/{{ORDER_NUMBER}}/g, orderData.order_number)
+        .replace(/{{CUSTOMER_NAME}}/g, orderData.customer_name || 'Guest Customer')
+        .replace(/{{CUSTOMER_EMAIL}}/g, orderData.customer_email || 'No email')
+        .replace(/{{ORDER_DATE}}/g, new Date(orderData.created_at).toLocaleString())
+        .replace(/{{TOTAL_AMOUNT}}/g, orderData.total.toFixed(2))
+        .replace(/{{DELIVERY_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
+        .replace(/{{ITEMS_LIST}}/g, this.formatOrderItems(orderData.items || []));
+
+      const success = await this.sendEmail({
+        to: 'ventechgadget@gmail.com',
+        subject: `New Order Received - ${orderData.order_number}`,
+        html: template,
+      });
+
+      return { success };
+    } catch (error) {
+      console.error('Error sending admin order notification:', error);
+      return { success: false, reason: error instanceof Error ? error.message : 'Unknown error' };
+    }
   }
 
   // Enhanced wishlist reminder email with settings check

@@ -217,6 +217,7 @@ export class OrderController {
           total,
           payment_method,
           delivery_address,
+          delivery_option: delivery_option || { name: 'Standard', price: delivery_fee || 0 },
           status: 'pending',
           payment_status: 'pending',
         }])
@@ -243,36 +244,107 @@ export class OrderController {
 
       if (itemsError) throw itemsError;
 
-      // Get user data for email
-      const { data: userData, error: userError } = await supabaseAdmin
-        .from('users')
-        .select('first_name, last_name, email')
-        .eq('id', user_id)
-        .single();
+      // Get user data for email (if logged in)
+      let userData: any = null;
+      if (user_id) {
+        const { data, error: userError } = await supabaseAdmin
+          .from('users')
+          .select('first_name, last_name, email, full_name')
+          .eq('id', user_id)
+          .maybeSingle();
 
-      if (userError) throw userError;
+        if (!userError) {
+          userData = data;
+        }
+      }
 
-      // Send order confirmation email
+      // Send order confirmation email to customer (if logged in)
+      if (userData && userData.email) {
+        try {
+          const customerName = userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'Customer';
+          const emailData = {
+            ...orderData,
+            customer_name: customerName,
+            customer_email: userData.email,
+            items: orderItems,
+          };
+
+          const emailResult = await enhancedEmailService.sendOrderConfirmation(emailData);
+          if (emailResult.skipped) {
+            console.log(`Order confirmation email skipped: ${emailResult.reason}`);
+          } else if (emailResult.success) {
+            console.log('Order confirmation email sent successfully');
+          } else {
+            console.error('Failed to send order confirmation email:', emailResult.reason);
+          }
+        } catch (emailError) {
+          console.error('Failed to send order confirmation email:', emailError);
+          // Don't fail the request if email fails
+        }
+      } else if (!user_id) {
+        // For guest orders, get email from delivery_address if provided
+        const guestEmail = (delivery_address as any)?.email;
+        if (guestEmail) {
+          try {
+            const customerName = delivery_address?.full_name || 'Guest Customer';
+            const emailData = {
+              ...orderData,
+              customer_name: customerName,
+              customer_email: guestEmail,
+              items: orderItems,
+            };
+
+            const emailResult = await enhancedEmailService.sendOrderConfirmation(emailData);
+            if (emailResult.success) {
+              console.log('Guest order confirmation email sent successfully');
+            }
+          } catch (emailError) {
+            console.error('Failed to send guest order confirmation email:', emailError);
+          }
+        }
+      }
+
+      // Send admin notification email
       try {
-        const customerName = `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'Customer';
+        const adminEmail = 'ventechgadget@gmail.com';
         const emailData = {
           ...orderData,
-          customer_name: customerName,
-          customer_email: userData.email,
+          customer_name: userData?.full_name || delivery_address?.full_name || 'Guest Customer',
+          customer_email: userData?.email || (delivery_address as any)?.email || 'No email',
           items: orderItems,
         };
 
-        const emailResult = await enhancedEmailService.sendOrderConfirmation(emailData);
-        if (emailResult.skipped) {
-          console.log(`Order confirmation email skipped: ${emailResult.reason}`);
-        } else if (emailResult.success) {
-          console.log('Order confirmation email sent successfully');
-        } else {
-          console.error('Failed to send order confirmation email:', emailResult.reason);
-        }
+        await enhancedEmailService.sendAdminOrderNotification(emailData);
+        console.log('Admin order notification email sent successfully');
       } catch (emailError) {
-        console.error('Failed to send order confirmation email:', emailError);
+        console.error('Failed to send admin order notification email:', emailError);
         // Don't fail the request if email fails
+      }
+
+      // Create admin notification in dashboard
+      try {
+        const { error: notifError } = await supabaseAdmin
+          .from('notifications')
+          .insert([{
+            type: 'order',
+            title: `New Order: ${orderData.order_number}`,
+            message: `New order received from ${userData?.full_name || delivery_address?.full_name || 'Guest Customer'}. Total: GHS ${orderData.total.toFixed(2)}`,
+            data: {
+              order_id: orderData.id,
+              order_number: orderData.order_number,
+              customer_name: userData?.full_name || delivery_address?.full_name || 'Guest',
+            },
+            is_read: false,
+          }]);
+
+        if (notifError) {
+          console.error('Failed to create admin notification:', notifError);
+        } else {
+          console.log('Admin notification created successfully');
+        }
+      } catch (notifError) {
+        console.error('Failed to create admin notification:', notifError);
+        // Don't fail the request if notification fails
       }
 
       res.json({
