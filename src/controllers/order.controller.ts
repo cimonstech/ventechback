@@ -26,15 +26,138 @@ export class OrderController {
 
       if (error) throw error;
 
+      // Extract is_pre_order from shipping_address for each order (for backward compatibility)
+      const ordersWithPreOrderFlag = (data || []).map((order: any) => {
+        const isPreOrder = order.is_pre_order || order.shipping_address?.is_pre_order || false;
+        const preOrderShippingOption = order.pre_order_shipping_option || order.shipping_address?.pre_order_shipping_option || null;
+        const estimatedArrivalDate = order.estimated_arrival_date || order.shipping_address?.estimated_arrival_date || null;
+
+        return {
+          ...order,
+          is_pre_order: isPreOrder,
+          pre_order_shipping_option: preOrderShippingOption,
+          estimated_arrival_date: estimatedArrivalDate,
+        };
+      });
+
       res.json({
         success: true,
-        data: data || [],
+        data: ordersWithPreOrderFlag,
       });
     } catch (error) {
       console.error('Error fetching orders:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to fetch orders',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  // Track order by number/ID and email (public endpoint with email verification)
+  async trackOrder(req: Request, res: Response) {
+    try {
+      const { order_number_or_id, email } = req.body;
+
+      if (!order_number_or_id || !email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Order number/ID and email are required',
+        });
+      }
+
+      // Try to find order by order_number first, then by id
+      // IMPORTANT: Do NOT filter by status - include ALL orders including cancelled ones
+      let { data, error } = await supabaseAdmin
+        .from('orders')
+        .select(`
+          *,
+          user:users!orders_user_id_fkey(id, email),
+          order_items:order_items(*)
+        `)
+        .eq('order_number', order_number_or_id)
+        .maybeSingle();
+
+      // If not found by order_number, try by id
+      if (!data && !error) {
+        const { data: dataById, error: errorById } = await supabaseAdmin
+          .from('orders')
+          .select(`
+            *,
+            user:users!orders_user_id_fkey(id, email),
+            order_items:order_items(*)
+          `)
+          .eq('id', order_number_or_id)
+          .maybeSingle();
+        
+        data = dataById;
+        error = errorById;
+      }
+
+      if (error) {
+        console.error('Error fetching order for tracking:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch order',
+          error: error.message,
+        });
+      }
+
+      if (!data) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found',
+        });
+      }
+
+      // Log order status for debugging (including cancelled orders)
+      console.log(`📦 Tracking order ${data.order_number}: status=${data.status}, payment_status=${data.payment_status}`);
+
+      // Verify email matches
+      const userEmail = data.user?.email?.toLowerCase();
+      const deliveryEmail = (data.delivery_address?.email || data.shipping_address?.email)?.toLowerCase();
+      const providedEmail = email.toLowerCase().trim();
+
+      const emailMatches = 
+        userEmail === providedEmail || 
+        deliveryEmail === providedEmail;
+
+      if (!emailMatches) {
+        // Email doesn't match - return 404 for security (don't reveal order exists)
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found',
+        });
+      }
+
+      // Extract is_pre_order from shipping_address if it exists there
+      const isPreOrder = data.is_pre_order || data.shipping_address?.is_pre_order || false;
+      const preOrderShippingOption = data.pre_order_shipping_option || data.shipping_address?.pre_order_shipping_option || null;
+      const estimatedArrivalDate = data.estimated_arrival_date || data.shipping_address?.estimated_arrival_date || null;
+
+      // Add pre-order fields to the response
+      const orderData = {
+        ...data,
+        items: data.order_items || [],
+        is_pre_order: isPreOrder,
+        pre_order_shipping_option: preOrderShippingOption,
+        estimated_arrival_date: estimatedArrivalDate,
+      };
+
+      res.json({
+        success: true,
+        data: orderData,
+      });
+    } catch (error) {
+      console.error('Error tracking order:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to track order',
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
@@ -57,9 +180,23 @@ export class OrderController {
 
       if (error) throw error;
 
+      // Extract is_pre_order from shipping_address if it exists there
+      // Also check if it's a direct column (for backward compatibility)
+      const isPreOrder = data.is_pre_order || data.shipping_address?.is_pre_order || false;
+      const preOrderShippingOption = data.pre_order_shipping_option || data.shipping_address?.pre_order_shipping_option || null;
+      const estimatedArrivalDate = data.estimated_arrival_date || data.shipping_address?.estimated_arrival_date || null;
+
+      // Add pre-order fields to the response
+      const orderData = {
+        ...data,
+        is_pre_order: isPreOrder,
+        pre_order_shipping_option: preOrderShippingOption,
+        estimated_arrival_date: estimatedArrivalDate,
+      };
+
       res.json({
         success: true,
-        data,
+        data: orderData,
       });
     } catch (error) {
       console.error('Error fetching order:', error);
@@ -96,6 +233,11 @@ export class OrderController {
 
       if (orderError) throw orderError;
 
+      // Extract is_pre_order from shipping_address if it exists there
+      const isPreOrder = orderData.is_pre_order || orderData.shipping_address?.is_pre_order || false;
+      const preOrderShippingOption = orderData.pre_order_shipping_option || orderData.shipping_address?.pre_order_shipping_option || null;
+      const estimatedArrivalDate = orderData.estimated_arrival_date || orderData.shipping_address?.estimated_arrival_date || null;
+
       // Send email notification
       try {
         // Determine customer email and name
@@ -119,21 +261,30 @@ export class OrderController {
             customer_email: customerEmail,
             items: orderData.order_items || [],
             delivery_address: orderData.shipping_address || orderData.delivery_address, // For email template compatibility
+            is_pre_order: isPreOrder,
+            pre_order_shipping_option: preOrderShippingOption,
+            estimated_arrival_date: estimatedArrivalDate,
           };
 
+          console.log(`📧 Preparing to send order status update email to: ${customerEmail}`);
           const emailResult = await enhancedEmailService.sendOrderStatusUpdate(emailData, status);
           if (emailResult.skipped) {
-            console.log(`Order status update email skipped: ${emailResult.reason}`);
+            console.log(`⚠️ Order status update email skipped: ${emailResult.reason}`);
           } else if (emailResult.success) {
-            console.log('Order status update email sent successfully to', customerEmail);
+            console.log(`✅ Order status update email sent successfully to ${customerEmail}`);
           } else {
-            console.error('Failed to send order status update email:', emailResult.reason);
+            console.error(`❌ Failed to send order status update email to ${customerEmail}:`, emailResult.reason);
           }
         } else {
-          console.warn('No email found for order status update. Order:', orderData.id);
+          console.warn('⚠️ No email found for order status update. Order:', orderData.id);
         }
-      } catch (emailError) {
-        console.error('Failed to send order status update email:', emailError);
+      } catch (emailError: any) {
+        console.error('❌ Error sending order status update email:', {
+          error: emailError,
+          message: emailError?.message || 'Unknown error',
+          orderId: orderData.id,
+          orderNumber: orderData.order_number,
+        });
         // Don't fail the request if email fails
       }
 
@@ -334,6 +485,10 @@ export class OrderController {
         order_items,
         notes,
         payment_reference,
+        // Pre-order fields
+        is_pre_order,
+        pre_order_shipping_option,
+        estimated_arrival_date,
       } = req.body;
 
       // Validate required fields
@@ -372,6 +527,12 @@ export class OrderController {
       const shippingAddress = delivery_address ? {
         ...delivery_address,
         delivery_option: delivery_option || { name: 'Standard', price: delivery_fee || 0 },
+        // Include pre-order information in shipping address
+        ...(is_pre_order ? {
+          is_pre_order: true,
+          pre_order_shipping_option: pre_order_shipping_option || null,
+          estimated_arrival_date: estimated_arrival_date || null,
+        } : {}),
       } : null;
 
       // Create order
@@ -391,7 +552,9 @@ export class OrderController {
           // Only include payment_reference if provided (store in shipping_address JSON)
           ...(payment_reference ? { payment_reference } : {}),
         } : null,
-        notes: notes || null,
+        notes: is_pre_order 
+          ? `${notes || ''}\n\n[PRE-ORDER] Shipping: ${pre_order_shipping_option || 'Not specified'}. Estimated Arrival: ${estimated_arrival_date ? new Date(estimated_arrival_date).toLocaleDateString() : 'TBD'}`.trim()
+          : (notes || null),
         status: 'pending',
         payment_status: payment_method === 'cash_on_delivery' ? 'pending' : 'pending', // Will be updated when payment verified
       };
@@ -439,42 +602,46 @@ export class OrderController {
       
       console.log(`✅ Created ${orderItems.length} order items`);
 
-      // Decrease stock for each product in the order
-      try {
-        for (const item of order_items) {
-          const { data: product, error: productError } = await supabaseAdmin
-            .from('products')
-            .select('stock_quantity, in_stock')
-            .eq('id', item.product_id)
-            .single();
-
-          if (!productError && product) {
-            const currentStock = product.stock_quantity || 0;
-            const newStock = Math.max(0, currentStock - item.quantity);
-            const newInStock = newStock > 0;
-
-            const { error: updateError } = await supabaseAdmin
+      // Decrease stock for each product in the order (skip for pre-orders)
+      if (!is_pre_order) {
+        try {
+          for (const item of order_items) {
+            const { data: product, error: productError } = await supabaseAdmin
               .from('products')
-              .update({
-                stock_quantity: newStock,
-                in_stock: newInStock,
-              })
-              .eq('id', item.product_id);
+              .select('stock_quantity, in_stock')
+              .eq('id', item.product_id)
+              .single();
 
-            if (updateError) {
-              console.error(`❌ Failed to update stock for product ${item.product_id}:`, updateError);
+            if (!productError && product) {
+              const currentStock = product.stock_quantity || 0;
+              const newStock = Math.max(0, currentStock - item.quantity);
+              const newInStock = newStock > 0;
+
+              const { error: updateError } = await supabaseAdmin
+                .from('products')
+                .update({
+                  stock_quantity: newStock,
+                  in_stock: newInStock,
+                })
+                .eq('id', item.product_id);
+
+              if (updateError) {
+                console.error(`❌ Failed to update stock for product ${item.product_id}:`, updateError);
+              } else {
+                console.log(`✅ Decreased stock for product ${item.product_id}: ${currentStock} → ${newStock}`);
+              }
             } else {
-              console.log(`✅ Decreased stock for product ${item.product_id}: ${currentStock} → ${newStock}`);
+              console.error(`❌ Error fetching product ${item.product_id} for stock update:`, productError);
             }
-          } else {
-            console.error(`❌ Error fetching product ${item.product_id} for stock update:`, productError);
           }
+        } catch (stockError) {
+          console.error('❌ Error updating product stock:', stockError);
+          // Don't fail order creation if stock update fails - log and continue
         }
-      } catch (stockError) {
-        console.error('❌ Error updating product stock:', stockError);
-        // Don't fail order creation if stock update fails - log and continue
-        // This allows the order to be created even if stock update fails
+      } else {
+        console.log('⏭️ Skipping stock update for pre-order');
       }
+      // This allows the order to be created even if stock update fails
 
       // Get user data for email (if logged in) - moved before transaction creation
       let userData: any = null;
@@ -588,6 +755,11 @@ export class OrderController {
         // Don't fail order creation if transaction creation fails
       }
 
+      // Extract is_pre_order from shipping_address or orderData
+      const isPreOrder = is_pre_order || orderData.is_pre_order || shippingAddress?.is_pre_order || false;
+      const preOrderShippingOption = pre_order_shipping_option || orderData.pre_order_shipping_option || shippingAddress?.pre_order_shipping_option || null;
+      const estimatedArrivalDate = estimated_arrival_date || orderData.estimated_arrival_date || shippingAddress?.estimated_arrival_date || null;
+
       // Determine customer email and name for order confirmation
       let customerEmail: string | null = null;
       let customerName: string = 'Customer';
@@ -614,6 +786,9 @@ export class OrderController {
             items: orderItems,
             notes: orderData.notes || null,
             delivery_address: shippingAddress, // Keep for email template compatibility
+            is_pre_order: isPreOrder,
+            pre_order_shipping_option: preOrderShippingOption,
+            estimated_arrival_date: estimatedArrivalDate,
           };
 
           const emailResult = await enhancedEmailService.sendOrderConfirmation(emailData);
@@ -647,6 +822,9 @@ export class OrderController {
           items: orderItems,
           notes: orderData.notes || null,
           delivery_address: shippingAddress, // Keep for email template compatibility
+          is_pre_order: isPreOrder,
+          pre_order_shipping_option: preOrderShippingOption,
+          estimated_arrival_date: estimatedArrivalDate,
         };
 
         const adminEmailResult = await enhancedEmailService.sendAdminOrderNotification(emailData);
@@ -876,15 +1054,31 @@ export class OrderController {
 
       if (orderError) throw orderError;
 
+      // Extract is_pre_order from shipping_address if it exists there
+      // Also check if it's a direct column (for backward compatibility)
+      const isPreOrder = orderData.is_pre_order || orderData.shipping_address?.is_pre_order || false;
+      const preOrderShippingOption = orderData.pre_order_shipping_option || orderData.shipping_address?.pre_order_shipping_option || null;
+      const estimatedArrivalDate = orderData.estimated_arrival_date || orderData.shipping_address?.estimated_arrival_date || null;
+
+      // Add pre-order fields to the order data for PDF
+      const orderDataForPDF = {
+        ...orderData,
+        is_pre_order: isPreOrder,
+        pre_order_shipping_option: preOrderShippingOption,
+        estimated_arrival_date: estimatedArrivalDate,
+      };
+
       // Debug: Log order data before PDF generation
       console.log('Order data for PDF:', {
         orderId: id,
-        hasOrderItems: !!orderData.order_items,
-        orderItemsLength: orderData.order_items?.length || 0,
+        hasOrderItems: !!orderDataForPDF.order_items,
+        orderItemsLength: orderDataForPDF.order_items?.length || 0,
+        is_pre_order: isPreOrder,
+        pre_order_shipping_option: preOrderShippingOption,
       });
 
       // Generate PDF
-      const pdfBuffer = await pdfService.generateOrderPDF(orderData);
+      const pdfBuffer = await pdfService.generateOrderPDF(orderDataForPDF);
 
       // Set response headers
       res.setHeader('Content-Type', 'application/pdf');

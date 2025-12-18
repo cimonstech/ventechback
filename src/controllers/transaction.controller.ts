@@ -76,5 +76,91 @@ export class TransactionController {
       });
     }
   }
+
+  // Refund a transaction
+  async refundTransaction(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+
+      // Fetch the transaction
+      const { data: transaction, error: fetchError } = await supabaseAdmin
+        .from('transactions')
+        .select(`
+          *,
+          order:orders!transactions_order_id_fkey(id, order_number, status, payment_status)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      if (!transaction) {
+        return res.status(404).json({
+          success: false,
+          message: 'Transaction not found',
+        });
+      }
+
+      // Check if transaction can be refunded
+      if (transaction.payment_status !== 'paid') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only paid transactions can be refunded',
+        });
+      }
+
+      if (transaction.payment_status === 'refunded') {
+        return res.status(400).json({
+          success: false,
+          message: 'Transaction has already been refunded',
+        });
+      }
+
+      // Update transaction status to refunded
+      const { data: updatedTransaction, error: updateError } = await supabaseAdmin
+        .from('transactions')
+        .update({
+          payment_status: 'refunded',
+          status: 'refunded',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      // If transaction is linked to an order, update order payment status
+      if (transaction.order_id && transaction.order) {
+        const orderStatus = transaction.order.status;
+        
+        // If order is cancelled or can be cancelled, update payment status
+        if (orderStatus === 'cancelled' || orderStatus === 'pending') {
+          await supabaseAdmin
+            .from('orders')
+            .update({
+              payment_status: 'refunded',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', transaction.order_id);
+        }
+      }
+
+      console.log(`✅ Transaction ${transaction.transaction_reference || id} refunded successfully`);
+
+      res.json({
+        success: true,
+        message: 'Transaction refunded successfully',
+        data: updatedTransaction,
+      });
+    } catch (error) {
+      console.error('Error refunding transaction:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to refund transaction',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
 }
 

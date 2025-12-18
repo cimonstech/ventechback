@@ -10,5 +10,8 @@ router.get('/', transactionController.getAllTransactions);
 // Get transaction by ID
 router.get('/:id', transactionController.getTransactionById);
 
+// Refund a transaction
+router.post('/:id/refund', transactionController.refundTransaction);
+
 export default router;
 

@@ -59,7 +59,15 @@ class EmailService {
       });
 
       if (error) {
-        console.error('Error sending email via Resend:', error);
+        console.error('❌ Error sending email via Resend:', {
+          error,
+          message: (error as any)?.message || 'Unknown error',
+          code: (error as any)?.code,
+          details: (error as any)?.details,
+          to: options.to,
+          from: fromEmail,
+          subject: options.subject,
+        });
         return false;
       }
 
@@ -270,6 +278,174 @@ class EmailService {
     }
   }
 
+  // Bulk order request email
+  async sendBulkOrderEmail(bulkOrderData: any): Promise<{ success: boolean; error?: string }> {
+    try {
+      const {
+        name,
+        phone,
+        email,
+        organization,
+        productType,
+        quantity,
+        preferredSpecs,
+        deliveryLocation,
+        paymentMethod,
+        preferredDeliveryDate,
+        notes,
+      } = bulkOrderData;
+      
+      // Create plain text version for better deliverability
+      const plainText = `
+New Bulk Order Request - VENTECH
+
+1. Contact Information
+Name: ${name}
+Phone: ${phone}
+Email: ${email}
+${organization ? `Organization: ${organization}` : ''}
+
+2. Order Details
+Product Type: ${productType}
+Quantity: ${quantity}
+${preferredSpecs ? `Preferred Specs: ${preferredSpecs}` : ''}
+
+3. Delivery & Payment
+Delivery Location: ${deliveryLocation}
+Payment Method: ${paymentMethod}
+${preferredDeliveryDate ? `Preferred Delivery Date: ${new Date(preferredDeliveryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}` : ''}
+
+${notes ? `4. Additional Notes\n${notes}` : ''}
+
+Action Required: Please contact the customer to confirm the order and provide pricing.
+
+VENTECH Gadgets - Your Trusted Tech Partner
+Email: ventechgadgets@gmail.com | Phone: +233 55 134 4310
+This bulk order request was submitted through the VENTECH website.
+      `.trim();
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>New Bulk Order Request - VENTECH</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5;">
+          <div style="max-width: 700px; margin: 20px auto; padding: 20px; background-color: #ffffff;">
+            <h2 style="color: #FF7A19; border-bottom: 3px solid #FF7A19; padding-bottom: 10px; margin-top: 0;">
+              New Bulk Order Request
+            </h2>
+            
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3 style="margin-top: 0; color: #1A1A1A;">1. Contact Information</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold; width: 150px;">Name:</td>
+                  <td style="padding: 8px 0;">${name}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Phone:</td>
+                  <td style="padding: 8px 0;"><a href="tel:${phone.replace(/\s/g, '')}">${phone}</a></td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Email:</td>
+                  <td style="padding: 8px 0;"><a href="mailto:${email}">${email}</a></td>
+                </tr>
+                ${organization ? `
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Organization:</td>
+                  <td style="padding: 8px 0;">${organization}</td>
+                </tr>
+                ` : ''}
+              </table>
+            </div>
+
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3 style="margin-top: 0; color: #1A1A1A;">2. Order Details</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold; width: 200px;">Product Type:</td>
+                  <td style="padding: 8px 0;">${productType}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Quantity:</td>
+                  <td style="padding: 8px 0; font-size: 18px; color: #FF7A19; font-weight: bold;">${quantity}</td>
+                </tr>
+                ${preferredSpecs ? `
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Preferred Specs:</td>
+                  <td style="padding: 8px 0;">${preferredSpecs.replace(/\n/g, '<br>')}</td>
+                </tr>
+                ` : ''}
+              </table>
+            </div>
+
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3 style="margin-top: 0; color: #1A1A1A;">3. Delivery & Payment</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold; width: 200px;">Delivery Location:</td>
+                  <td style="padding: 8px 0;">${deliveryLocation}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Payment Method:</td>
+                  <td style="padding: 8px 0;">${paymentMethod}</td>
+                </tr>
+                ${preferredDeliveryDate ? `
+                <tr>
+                  <td style="padding: 8px 0; font-weight: bold;">Preferred Delivery Date:</td>
+                  <td style="padding: 8px 0;">${new Date(preferredDeliveryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</td>
+                </tr>
+                ` : ''}
+              </table>
+            </div>
+
+            ${notes ? `
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3 style="margin-top: 0; color: #1A1A1A;">4. Additional Notes</h3>
+              <div style="background-color: white; padding: 15px; border-radius: 4px; border-left: 4px solid #FF7A19;">
+                ${notes.replace(/\n/g, '<br>')}
+              </div>
+            </div>
+            ` : ''}
+            
+            <div style="margin-top: 30px; padding: 20px; background-color: #fff3e0; border-radius: 8px; border-left: 4px solid #FF7A19;">
+              <p style="margin: 0; font-weight: bold; color: #1A1A1A;">
+                ⚡ Action Required: Please contact the customer to confirm the order and provide pricing.
+              </p>
+            </div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
+              <p><strong>VENTECH Gadgets</strong> - Your Trusted Tech Partner</p>
+              <p>Email: ventechgadgets@gmail.com | Phone: +233 55 134 4310</p>
+              <p style="margin-top: 10px; font-style: italic;">This bulk order request was submitted through the VENTECH website.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Use support email for bulk order requests (admin can reply)
+      // Remove emoji from subject to improve deliverability
+      const subject = `Bulk Order Request: ${productType} (${quantity}) - ${name}`;
+      
+      const success = await this.sendEmail({
+        to: 'ventechgadgets@gmail.com',
+        subject: subject,
+        html: html,
+        // Note: Resend doesn't support plain text in the current implementation,
+        // but we can add it if needed via attachments or separate API call
+      }, true); // true = use support email
+
+      return { success };
+    } catch (error) {
+      console.error('Error sending bulk order email:', error);
+      return { success: false, error: 'Failed to send bulk order email' };
+    }
+  }
+
   // Helper methods
   private formatAddress(address: any): string {
     if (typeof address === 'string') return address;
@@ -330,5 +506,6 @@ const emailService = new EmailService();
 // Export individual functions for specific use cases
 export const sendInvestmentEmail = emailService.sendInvestmentEmail.bind(emailService);
 export const sendContactEmail = emailService.sendContactEmail.bind(emailService);
+export const sendBulkOrderEmail = emailService.sendBulkOrderEmail.bind(emailService);
 
 export default emailService;

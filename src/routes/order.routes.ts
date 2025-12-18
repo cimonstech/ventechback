@@ -4,6 +4,9 @@ import { OrderController } from '../controllers/order.controller';
 const router = express.Router();
 const orderController = new OrderController();
 
+// Track order by number/ID and email (public endpoint)
+router.post('/track', orderController.trackOrder.bind(orderController));
+
 // Get all orders (admin only)
 router.get('/', orderController.getAllOrders.bind(orderController));
 

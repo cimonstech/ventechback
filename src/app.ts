@@ -8,6 +8,7 @@ import bannerRoutes from './routes/banner.routes';
 import investmentRoutes from './routes/investment.routes';
 import uploadRoutes from './routes/upload.routes';
 import contactRoutes from './routes/contact.routes';
+import bulkOrderRoutes from './routes/bulkOrder.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 
 const app: Application = express();
@@ -47,6 +48,7 @@ app.use('/api/banners', bannerRoutes);
 app.use('/api/investment', investmentRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/bulk-orders', bulkOrderRoutes);
 
 // Error handling
 app.use(notFound);

@@ -140,32 +140,131 @@ class EnhancedEmailService {
   // Enhanced order confirmation email with preference check
   async sendOrderConfirmation(orderData: any): Promise<{ success: boolean; skipped?: boolean; reason?: string }> {
     try {
-      // Always send order confirmation emails (critical transactional emails)
-      // Only check user preferences if user_id exists (for logged-in users)
-      // For guest orders, always send
-      if (orderData.user_id) {
-        const shouldSend = await this.shouldSendEmail(orderData.user_id, 'transactional');
-        
-        if (!shouldSend) {
-          console.log(`Skipping order confirmation email for user ${orderData.user_id} - email notifications disabled`);
-          return { success: true, skipped: true, reason: 'User has disabled email notifications' };
-        }
-      }
+      // ALWAYS send order confirmation emails - these are critical transactional emails
+      // User preferences should NOT block order confirmations (only marketing emails)
+      // Order confirmations are required for order tracking and legal purposes
+      // Removed preference check - transactional emails must always be sent
 
       // Email templates are in the root email-templates folder
-      // __dirname in compiled code is backend/dist/services/, so go up 4 levels to reach root
-      const templatePath = path.join(__dirname, '../../../../email-templates/order-confirmation.html');
+      // __dirname in compiled code is backend/dist/services/, so go up 3 levels to reach root
+      // Try multiple path resolutions for reliability
+      let templatePath = path.join(__dirname, '../../../email-templates/order-confirmation.html');
+      
+      // If not found, try from project root (when running from backend directory)
+      if (!fs.existsSync(templatePath)) {
+        const projectRoot = process.cwd();
+        templatePath = path.join(projectRoot, 'email-templates', 'order-confirmation.html');
+      }
+      
+      // If still not found, try from backend root
+      if (!fs.existsSync(templatePath)) {
+        templatePath = path.join(__dirname, '../../../../email-templates/order-confirmation.html');
+      }
+      
+      if (!fs.existsSync(templatePath)) {
+        throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+      }
+      
       let template = fs.readFileSync(templatePath, 'utf8');
 
+      // Extract is_pre_order flag
+      const isPreOrder = orderData.is_pre_order || false;
+      const orderTypeTag = isPreOrder ? 'PRE-ORDER' : 'REGULAR';
+      const orderTypeBadge = isPreOrder 
+        ? '<span style="background-color: #000000; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">PRE-ORDER</span>'
+        : '<span style="background-color: #10b981; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">REGULAR</span>';
+
+      // Calculate values for placeholders
+      const subtotal = orderData.subtotal || (orderData.items || []).reduce((sum: number, item: any) => sum + (item.subtotal || (item.unit_price || 0) * (item.quantity || 0)), 0);
+      const shippingFee = orderData.shipping_fee || orderData.delivery_fee || 0;
+      const total = orderData.total || (subtotal + shippingFee);
+      
+      // Format payment method
+      const paymentMethod = orderData.payment_method || 'Cash on Delivery';
+      const paymentMethodDisplay = paymentMethod === 'paystack' ? 'Paystack (Online Payment)' 
+        : paymentMethod === 'cash_on_delivery' ? 'Cash on Delivery'
+        : paymentMethod === 'bank_transfer' ? 'Bank Transfer'
+        : paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1).replace(/_/g, ' ');
+      
+      // Format payment status
+      const paymentStatus = orderData.payment_status || 'pending';
+      const paymentStatusDisplay = paymentStatus === 'paid' ? 'Paid' 
+        : paymentStatus === 'pending' ? 'Pending'
+        : paymentStatus === 'failed' ? 'Failed'
+        : paymentStatus === 'refunded' ? 'Refunded'
+        : paymentStatus.charAt(0).toUpperCase() + paymentStatus.slice(1);
+      
+      // Calculate estimated delivery
+      let estimatedDelivery = 'TBD';
+      if (isPreOrder && orderData.estimated_arrival_date) {
+        estimatedDelivery = new Date(orderData.estimated_arrival_date).toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+      } else if (orderData.delivery_address?.delivery_option?.estimated_days) {
+        const days = orderData.delivery_address.delivery_option.estimated_days;
+        const deliveryDate = new Date();
+        deliveryDate.setDate(deliveryDate.getDate() + days);
+        estimatedDelivery = deliveryDate.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+      }
+      
+      // Generate URLs
+      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || 'https://ventechgadgets.com';
+      const trackingUrl = `${siteUrl}/track-order`;
+      const contactUrl = `${siteUrl}/contact`;
+      
+      // Get logo URL from R2 storage (ventech_logo_1.png)
+      const r2PublicUrl = process.env.R2_PUBLIC_URL || process.env.NEXT_PUBLIC_IMAGES_URL || process.env.IMAGES_URL;
+      const r2AccountId = process.env.R2_ACCOUNT_ID;
+      
+      // Use direct logo URL
+      const logoUrl = 'https://files.ventechgadgets.com/ventech-logomain.png';
+      
       // Replace placeholders with actual data
       template = template
-        .replace('{{ORDER_NUMBER}}', orderData.order_number)
-        .replace('{{CUSTOMER_NAME}}', orderData.customer_name)
-        .replace('{{ORDER_DATE}}', new Date(orderData.created_at).toLocaleDateString())
-        .replace('{{TOTAL_AMOUNT}}', `GHS ${orderData.total.toFixed(2)}`)
-        .replace('{{DELIVERY_ADDRESS}}', this.formatAddress(orderData.delivery_address))
-        .replace('{{ITEMS_LIST}}', this.formatOrderItems(orderData.items))
-        .replace('{{ORDER_NOTES}}', orderData.notes ? `<div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin: 20px 0;"><h3 style="color: #1A1A1A; font-size: 16px; margin: 0 0 10px 0;">Order Notes:</h3><p style="color: #3A3A3A; font-size: 14px; margin: 0;">${orderData.notes}</p></div>` : '');
+        .replace(/{{ORDER_NUMBER}}/g, orderData.order_number || 'N/A')
+        .replace(/{{CUSTOMER_NAME}}/g, orderData.customer_name || 'Customer')
+        .replace(/{{CUSTOMER_EMAIL}}/g, orderData.customer_email || 'N/A')
+        .replace(/{{ORDER_DATE}}/g, orderData.created_at ? new Date(orderData.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A')
+        .replace(/{{TOTAL_AMOUNT}}/g, `GHS ${total.toFixed(2)}`)
+        .replace(/{{SUBTOTAL}}/g, subtotal.toFixed(2))
+        .replace(/{{SHIPPING}}/g, shippingFee.toFixed(2))
+        .replace(/{{TOTAL}}/g, total.toFixed(2))
+        .replace(/{{PAYMENT_METHOD}}/g, paymentMethodDisplay)
+        .replace(/{{PAYMENT_STATUS}}/g, paymentStatusDisplay)
+        .replace(/{{ESTIMATED_DELIVERY}}/g, estimatedDelivery)
+        .replace(/{{TRACKING_URL}}/g, trackingUrl)
+        .replace(/{{CONTACT_URL}}/g, contactUrl)
+        .replace(/{{LOGO_URL}}/g, logoUrl)
+        .replace(/{{DELIVERY_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
+        .replace(/{{SHIPPING_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
+        .replace(/{{ITEMS_LIST}}/g, this.formatOrderItems(orderData.items || []))
+        .replace(/{{ORDER_ITEMS}}/g, this.formatOrderItems(orderData.items || []))
+        .replace(/{{ORDER_NOTES}}/g, orderData.notes ? `<div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin: 20px 0;"><h3 style="color: #1A1A1A; font-size: 16px; margin: 0 0 10px 0;">Order Notes:</h3><p style="color: #3A3A3A; font-size: 14px; margin: 0;">${orderData.notes}</p></div>` : '')
+        .replace(/{{ORDER_TYPE_BADGE}}/g, orderTypeBadge);
+
+      // Add pre-order specific information if applicable
+      let preOrderInfo = '';
+      if (isPreOrder) {
+        const shippingMethod = orderData.pre_order_shipping_option || 'Not specified';
+        const estimatedArrival = orderData.estimated_arrival_date 
+          ? new Date(orderData.estimated_arrival_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+          : 'TBD';
+        
+        preOrderInfo = `
+          <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <h3 style="color: #856404; font-size: 16px; margin: 0 0 10px 0;">Pre-Order Information</h3>
+            <p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Shipping Method:</strong> ${shippingMethod}</p>
+            <p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Estimated Arrival:</strong> ${estimatedArrival}</p>
+          </div>
+        `;
+      }
+      template = template.replace(/{{PRE_ORDER_INFO}}/g, preOrderInfo);
 
       // Use support email for order confirmations (customers can reply)
       if (!orderData.customer_email) {
@@ -176,7 +275,7 @@ class EnhancedEmailService {
       console.log(`📧 Sending order confirmation email to: ${orderData.customer_email}`);
       const success = await this.sendEmail({
         to: orderData.customer_email,
-        subject: `Order Confirmation - ${orderData.order_number}`,
+        subject: `[${orderTypeTag}] Order Confirmation - ${orderData.order_number}`,
         html: template,
       }, true); // true = use support email
 
@@ -194,35 +293,77 @@ class EnhancedEmailService {
   // Enhanced order status update email with preference check
   async sendOrderStatusUpdate(orderData: any, newStatus: string): Promise<{ success: boolean; skipped?: boolean; reason?: string }> {
     try {
-      // Always send order status update emails (critical transactional emails)
-      // Only check user preferences if user_id exists (for logged-in users)
-      // For guest orders, always send status update emails
-      if (orderData.user_id) {
-        const shouldSend = await this.shouldSendEmail(orderData.user_id, 'transactional');
-        
-        if (!shouldSend) {
-          console.log(`Skipping order status update email for user ${orderData.user_id} - email notifications disabled`);
-          return { success: true, skipped: true, reason: 'User has disabled email notifications' };
-        }
-      }
+      // ALWAYS send order status update emails - these are critical transactional emails
+      // User preferences should NOT block order status updates (only marketing emails)
+      // Order status updates are required for order tracking and customer communication
+
+      // Extract is_pre_order flag
+      const isPreOrder = orderData.is_pre_order || false;
+      const orderTypeTag = isPreOrder ? 'PRE-ORDER' : 'REGULAR';
+      const orderTypeBadge = isPreOrder 
+        ? '<span style="background-color: #000000; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">PRE-ORDER</span>'
+        : '<span style="background-color: #10b981; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">REGULAR</span>';
 
       // Email templates are in the root email-templates folder
-      const templatePath = path.join(__dirname, '../../../../email-templates/order-status-update.html');
+      // __dirname in compiled code is backend/dist/services/, so go up 3 levels to reach root
+      // Try multiple path resolutions for reliability
+      let templatePath = path.join(__dirname, '../../../email-templates/order-status-update.html');
+      
+      // If not found, try from project root (when running from backend directory)
+      if (!fs.existsSync(templatePath)) {
+        const projectRoot = process.cwd();
+        templatePath = path.join(projectRoot, 'email-templates', 'order-status-update.html');
+      }
+      
+      // If still not found, try from backend root
+      if (!fs.existsSync(templatePath)) {
+        templatePath = path.join(__dirname, '../../../../email-templates/order-status-update.html');
+      }
+      
+      if (!fs.existsSync(templatePath)) {
+        throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+      }
+      
       let template = fs.readFileSync(templatePath, 'utf8');
 
+      // Replace placeholders with actual data
       template = template
-        .replace('{{ORDER_NUMBER}}', orderData.order_number)
-        .replace('{{CUSTOMER_NAME}}', orderData.customer_name)
-        .replace('{{NEW_STATUS}}', newStatus)
-        .replace('{{ORDER_DATE}}', new Date(orderData.created_at).toLocaleDateString())
-        .replace('{{TOTAL_AMOUNT}}', `GHS ${orderData.total.toFixed(2)}`);
+        .replace(/{{ORDER_NUMBER}}/g, orderData.order_number)
+        .replace(/{{CUSTOMER_NAME}}/g, orderData.customer_name)
+        .replace(/{{NEW_STATUS}}/g, newStatus.charAt(0).toUpperCase() + newStatus.slice(1))
+        .replace(/{{ORDER_DATE}}/g, new Date(orderData.created_at).toLocaleDateString())
+        .replace(/{{TOTAL_AMOUNT}}/g, `GHS ${orderData.total.toFixed(2)}`)
+        .replace(/{{ORDER_TYPE_BADGE}}/g, orderTypeBadge);
+
+      // Add pre-order specific information if applicable
+      let preOrderInfo = '';
+      if (isPreOrder) {
+        preOrderInfo = `
+          <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <h3 style="color: #856404; font-size: 16px; margin: 0 0 10px 0;">Pre-Order Information</h3>
+            ${orderData.pre_order_shipping_option ? `<p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Shipping Method:</strong> ${orderData.pre_order_shipping_option}</p>` : ''}
+            ${orderData.estimated_arrival_date ? `<p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Estimated Arrival:</strong> ${new Date(orderData.estimated_arrival_date).toLocaleDateString()}</p>` : ''}
+          </div>
+        `;
+      }
+      template = template.replace(/{{PRE_ORDER_INFO}}/g, preOrderInfo);
 
       // Use support email for order status updates (customers can reply)
+      if (!orderData.customer_email) {
+        console.error('❌ No customer email provided for order status update:', orderData.order_number);
+        return { success: false, reason: 'No customer email provided' };
+      }
+
+      console.log(`📧 Sending order status update email to: ${orderData.customer_email}`);
       const success = await this.sendEmail({
         to: orderData.customer_email,
-        subject: `Order Update - ${orderData.order_number}`,
+        subject: `[${orderTypeTag}] Order Update - ${orderData.order_number}`,
         html: template,
       }, true); // true = use support email
+
+      if (!success) {
+        console.error('❌ Failed to send order status update email to:', orderData.customer_email);
+      }
 
       return { success };
     } catch (error) {
@@ -295,14 +436,91 @@ class EnhancedEmailService {
   private formatOrderItems(items: any[]): string {
     if (!items || items.length === 0) return 'No items';
     
+    // Get image base URL from environment
+    const imagesBaseUrl = process.env.NEXT_PUBLIC_IMAGES_URL || process.env.IMAGES_URL || 'https://images.ventechgadgets.com';
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+    
     return items.map(item => {
       const unitPrice = item.unit_price || item.price || 0;
       const subtotal = item.subtotal || (unitPrice * (item.quantity || 0));
+      
+      // Get product image URL - try multiple possible fields
+      let imageUrl = item.product_image || item.thumbnail || item.image_url || item.image || '';
+      
+      // Handle different URL formats
+      if (imageUrl) {
+        // If it's already a full URL (http/https), use it as-is
+        if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+          // Already a full URL, use as-is
+        }
+        // If it starts with /storage/, it's a Supabase storage path
+        else if (imageUrl.startsWith('/storage/') || imageUrl.startsWith('storage/')) {
+          const cleanPath = imageUrl.replace(/^\/?storage\/v1\/object\/public\//, '');
+          if (supabaseUrl) {
+            imageUrl = `${supabaseUrl}/storage/v1/object/public/${cleanPath}`;
+          } else {
+            // Fallback to images base URL if Supabase URL not available
+            imageUrl = `${imagesBaseUrl}/${cleanPath}`;
+          }
+        }
+        // If it starts with /, prepend base URL
+        else if (imageUrl.startsWith('/')) {
+          imageUrl = `${imagesBaseUrl}${imageUrl}`;
+        }
+        // Otherwise, assume it's a storage path and construct Supabase URL or use base URL
+        else {
+          // Try Supabase storage first
+          if (supabaseUrl) {
+            imageUrl = `${supabaseUrl}/storage/v1/object/public/products/${imageUrl}`;
+          } else {
+            // Fallback to images base URL
+            imageUrl = `${imagesBaseUrl}/${imageUrl}`;
+          }
+        }
+      } else {
+        // Fallback to placeholder if no image
+        imageUrl = `${imagesBaseUrl}/placeholder-product.webp`;
+      }
+      
+      // Check if item is pre-order
+      const isPreOrder = item.is_pre_order || false;
+      const preOrderBadge = isPreOrder 
+        ? '<span style="background-color: #000000; color: #ffffff; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: bold; margin-left: 8px;">PRE-ORDER</span>'
+        : '';
+      
       return `<tr>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.product_name || 'Product'}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.quantity || 0}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${unitPrice.toFixed(2)}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${subtotal.toFixed(2)}</td>
+        <td style="padding: 15px; border-bottom: 1px solid #eee; vertical-align: top;">
+          <table cellpadding="0" cellspacing="0" style="width: 100%;">
+            <tr>
+              <td style="width: 80px; padding-right: 15px; vertical-align: top;">
+                <img src="${imageUrl}" alt="${item.product_name || 'Product'}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 6px; border: 1px solid #e0e0e0;" />
+              </td>
+              <td style="vertical-align: top;">
+                <div style="font-weight: bold; color: #1A1A1A; margin-bottom: 5px; font-size: 14px;">
+                  ${item.product_name || 'Product'}${preOrderBadge}
+                </div>
+                ${item.selected_variants && Object.keys(item.selected_variants).length > 0 ? `
+                  <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                    ${Object.values(item.selected_variants).map((variant: any) => 
+                      `<span style="background-color: #f0f0f0; padding: 2px 6px; border-radius: 3px; margin-right: 5px; display: inline-block; margin-top: 3px;">
+                        ${variant.name || variant.label || ''}: ${variant.value || ''}
+                      </span>`
+                    ).join('')}
+                  </div>
+                ` : ''}
+              </td>
+            </tr>
+          </table>
+        </td>
+        <td style="padding: 15px; border-bottom: 1px solid #eee; text-align: center; vertical-align: top;">
+          <div style="font-weight: bold; color: #1A1A1A;">${item.quantity || 0}</div>
+        </td>
+        <td style="padding: 15px; border-bottom: 1px solid #eee; text-align: right; vertical-align: top;">
+          <div style="color: #3A3A3A;">GHS ${unitPrice.toFixed(2)}</div>
+        </td>
+        <td style="padding: 15px; border-bottom: 1px solid #eee; text-align: right; vertical-align: top;">
+          <div style="font-weight: bold; color: #FF7A19;">GHS ${subtotal.toFixed(2)}</div>
+        </td>
       </tr>`;
     }).join('');
   }
@@ -340,12 +558,13 @@ class EnhancedEmailService {
               </div>
               <div class="content">
                 <div class="order-info">
-                  <h2>Order #{{ORDER_NUMBER}}</h2>
+                  <h2>Order #{{ORDER_NUMBER}} {{ORDER_TYPE_BADGE}}</h2>
                   <p><strong>Customer:</strong> {{CUSTOMER_NAME}}</p>
                   <p><strong>Email:</strong> {{CUSTOMER_EMAIL}}</p>
                   <p><strong>Date:</strong> {{ORDER_DATE}}</p>
                   <p><strong>Total:</strong> GHS {{TOTAL_AMOUNT}}</p>
                   {{ORDER_NOTES}}
+                  {{PRE_ORDER_INFO}}
                 </div>
                 <h3>Order Items:</h3>
                 {{ITEMS_LIST}}
@@ -361,6 +580,13 @@ class EnhancedEmailService {
         `;
       }
 
+      // Extract is_pre_order flag
+      const isPreOrder = orderData.is_pre_order || false;
+      const orderTypeTag = isPreOrder ? 'PRE-ORDER' : 'REGULAR';
+      const orderTypeBadge = isPreOrder 
+        ? '<span style="background-color: #000000; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">PRE-ORDER</span>'
+        : '<span style="background-color: #10b981; color: #ffffff; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin-left: 10px;">REGULAR</span>';
+
       // Replace placeholders
       template = template
         .replace(/{{ORDER_NUMBER}}/g, orderData.order_number)
@@ -370,13 +596,27 @@ class EnhancedEmailService {
         .replace(/{{TOTAL_AMOUNT}}/g, orderData.total.toFixed(2))
         .replace(/{{DELIVERY_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
         .replace(/{{ITEMS_LIST}}/g, this.formatOrderItems(orderData.items || []))
-        .replace(/{{ORDER_NOTES}}/g, orderData.notes ? `<div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin: 20px 0;"><h3 style="color: #1A1A1A; font-size: 16px; margin: 0 0 10px 0;">Order Notes:</h3><p style="color: #3A3A3A; font-size: 14px; margin: 0;">${orderData.notes}</p></div>` : '');
+        .replace(/{{ORDER_NOTES}}/g, orderData.notes ? `<div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin: 20px 0;"><h3 style="color: #1A1A1A; font-size: 16px; margin: 0 0 10px 0;">Order Notes:</h3><p style="color: #3A3A3A; font-size: 14px; margin: 0;">${orderData.notes}</p></div>` : '')
+        .replace(/{{ORDER_TYPE_BADGE}}/g, orderTypeBadge);
+
+      // Add pre-order specific information if applicable
+      let preOrderInfo = '';
+      if (isPreOrder) {
+        preOrderInfo = `
+          <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <h3 style="color: #856404; font-size: 16px; margin: 0 0 10px 0;">Pre-Order Information</h3>
+            ${orderData.pre_order_shipping_option ? `<p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Shipping Method:</strong> ${orderData.pre_order_shipping_option}</p>` : ''}
+            ${orderData.estimated_arrival_date ? `<p style="color: #856404; font-size: 14px; margin: 5px 0;"><strong>Estimated Arrival:</strong> ${new Date(orderData.estimated_arrival_date).toLocaleDateString()}</p>` : ''}
+          </div>
+        `;
+      }
+      template = template.replace(/{{PRE_ORDER_INFO}}/g, preOrderInfo);
 
       // Use support email for admin notifications (they can reply)
       // Send to ventechgadgets@gmail.com
       const success = await this.sendEmail({
         to: 'ventechgadgets@gmail.com',
-        subject: `New Order Received - ${orderData.order_number}`,
+        subject: `[${orderTypeTag}] New Order Received - ${orderData.order_number}`,
         html: template,
       }, true); // true = use support email
 
