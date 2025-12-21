@@ -33,7 +33,7 @@
     "resend": "^6.4.0"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.17",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "@types/pdfkit": "^0.13.9",

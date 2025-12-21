@@ -1,5 +1,5 @@
-import express, { Application } from 'express';
-import cors from 'cors';
+import express, { Application, Request, Response } from 'express';
+import cors, { CorsOptions } from 'cors';
 import productRoutes from './routes/product.routes';
 import orderRoutes from './routes/order.routes';
 import paymentRoutes from './routes/payment.routes';
@@ -14,15 +14,15 @@ import { errorHandler, notFound } from './middleware/error.middleware';
 const app: Application = express();
 
 // Middleware
-const allowedOrigins = process.env.FRONTEND_URL 
+const allowedOrigins: string[] = process.env.FRONTEND_URL
   ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
-app.use(cors({
-  origin: (origin, callback) => {
+const corsOptions: CorsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -30,12 +30,14 @@ app.use(cors({
     }
   },
   credentials: true,
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', message: 'VENTECH API is running' });
 });
 
@@ -55,4 +57,3 @@ app.use(notFound);
 app.use(errorHandler);
 
 export default app;
-
