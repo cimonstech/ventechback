@@ -81,7 +81,25 @@ class EmailService {
 
   // Order confirmation email
   async sendOrderConfirmation(orderData: any): Promise<boolean> {
-    const templatePath = path.join(__dirname, '../../email-templates/order-confirmation.html');
+    // Try multiple path resolutions for reliability
+    let templatePath = path.join(__dirname, '../../email-templates/order-confirmation.html');
+    
+    // If not found, try from backend root (current working directory)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, 'email-templates', 'order-confirmation.html');
+    }
+    
+    // If still not found, try from project root (one level up from backend)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, '..', 'email-templates', 'order-confirmation.html');
+    }
+    
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+    }
+    
     let template = fs.readFileSync(templatePath, 'utf8');
 
     // Replace placeholders with actual data
@@ -103,7 +121,25 @@ class EmailService {
 
   // Order status update email
   async sendOrderStatusUpdate(orderData: any, newStatus: string): Promise<boolean> {
-    const templatePath = path.join(__dirname, '../../email-templates/order-status-update.html');
+    // Try multiple path resolutions for reliability
+    let templatePath = path.join(__dirname, '../../email-templates/order-status-update.html');
+    
+    // If not found, try from backend root (current working directory)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, 'email-templates', 'order-status-update.html');
+    }
+    
+    // If still not found, try from project root (one level up from backend)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, '..', 'email-templates', 'order-status-update.html');
+    }
+    
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+    }
+    
     let template = fs.readFileSync(templatePath, 'utf8');
 
     template = template
@@ -123,7 +159,25 @@ class EmailService {
 
   // Order cancellation email
   async sendOrderCancellation(orderData: any): Promise<boolean> {
-    const templatePath = path.join(__dirname, '../../email-templates/order-cancellation.html');
+    // Try multiple path resolutions for reliability
+    let templatePath = path.join(__dirname, '../../email-templates/order-cancellation.html');
+    
+    // If not found, try from backend root (current working directory)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, 'email-templates', 'order-cancellation.html');
+    }
+    
+    // If still not found, try from project root (one level up from backend)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, '..', 'email-templates', 'order-cancellation.html');
+    }
+    
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+    }
+    
     let template = fs.readFileSync(templatePath, 'utf8');
 
     template = template
@@ -141,7 +195,25 @@ class EmailService {
 
   // Wishlist reminder email
   async sendWishlistReminder(userData: any, wishlistItems: any[]): Promise<boolean> {
-    const templatePath = path.join(__dirname, '../../email-templates/wishlist-reminder.html');
+    // Try multiple path resolutions for reliability
+    let templatePath = path.join(__dirname, '../../email-templates/wishlist-reminder.html');
+    
+    // If not found, try from backend root (current working directory)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, 'email-templates', 'wishlist-reminder.html');
+    }
+    
+    // If still not found, try from project root (one level up from backend)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, '..', 'email-templates', 'wishlist-reminder.html');
+    }
+    
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+    }
+    
     let template = fs.readFileSync(templatePath, 'utf8');
 
     template = template
@@ -158,7 +230,25 @@ class EmailService {
 
   // Cart abandonment email
   async sendCartAbandonmentReminder(userData: any, cartItems: any[]): Promise<boolean> {
-    const templatePath = path.join(__dirname, '../../email-templates/cart-abandonment.html');
+    // Try multiple path resolutions for reliability
+    let templatePath = path.join(__dirname, '../../email-templates/cart-abandonment.html');
+    
+    // If not found, try from backend root (current working directory)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, 'email-templates', 'cart-abandonment.html');
+    }
+    
+    // If still not found, try from project root (one level up from backend)
+    if (!fs.existsSync(templatePath)) {
+      const backendRoot = process.cwd();
+      templatePath = path.join(backendRoot, '..', 'email-templates', 'cart-abandonment.html');
+    }
+    
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+    }
+    
     let template = fs.readFileSync(templatePath, 'utf8');
 
     template = template
