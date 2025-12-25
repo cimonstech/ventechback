@@ -589,6 +589,76 @@ This bulk order request was submitted through the VENTECH website.
     };
     return messages[status] || 'Your order status has been updated.';
   }
+
+  // Affiliate application email
+  async sendAffiliateApplicationEmail(affiliateData: any): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Try multiple path resolutions for reliability
+      let templatePath = path.join(__dirname, '../../email-templates/affiliate-application.html');
+      
+      // If not found, try from backend root (current working directory)
+      if (!fs.existsSync(templatePath)) {
+        const backendRoot = process.cwd();
+        templatePath = path.join(backendRoot, 'email-templates', 'affiliate-application.html');
+      }
+      
+      // If still not found, try from project root (one level up from backend)
+      if (!fs.existsSync(templatePath)) {
+        const backendRoot = process.cwd();
+        templatePath = path.join(backendRoot, '..', 'email-templates', 'affiliate-application.html');
+      }
+      
+      if (!fs.existsSync(templatePath)) {
+        throw new Error(`Email template not found. Tried: ${templatePath}. Current dir: ${__dirname}, CWD: ${process.cwd()}`);
+      }
+
+      let template = fs.readFileSync(templatePath, 'utf8');
+
+      // Handle conditional sections first
+      // Remove sections if optional fields are empty
+      if (!affiliateData.audienceSize) {
+        template = template.replace(/{{#AUDIENCE_SIZE}}[\s\S]*?{{\/AUDIENCE_SIZE}}/g, '');
+      } else {
+        template = template.replace(/{{#AUDIENCE_SIZE}}/g, '').replace(/{{\/AUDIENCE_SIZE}}/g, '');
+      }
+
+      if (!affiliateData.payoutMethod) {
+        template = template.replace(/{{#PAYOUT_METHOD}}[\s\S]*?{{\/PAYOUT_METHOD}}/g, '');
+      } else {
+        template = template.replace(/{{#PAYOUT_METHOD}}/g, '').replace(/{{\/PAYOUT_METHOD}}/g, '');
+      }
+
+      if (!affiliateData.reason) {
+        template = template.replace(/{{#REASON}}[\s\S]*?{{\/REASON}}/g, '');
+      } else {
+        template = template.replace(/{{#REASON}}/g, '').replace(/{{\/REASON}}/g, '');
+      }
+
+      // Replace placeholders
+      template = template
+        .replace(/{{FULL_NAME}}/g, affiliateData.fullName || 'N/A')
+        .replace(/{{EMAIL}}/g, affiliateData.email || 'N/A')
+        .replace(/{{PHONE}}/g, affiliateData.phone || 'N/A')
+        .replace(/{{COUNTRY}}/g, affiliateData.country || 'N/A')
+        .replace(/{{PROMOTION_CHANNEL}}/g, affiliateData.promotionChannel || 'N/A')
+        .replace(/{{PLATFORM_LINK}}/g, affiliateData.platformLink || 'N/A')
+        .replace(/{{AUDIENCE_SIZE}}/g, affiliateData.audienceSize || 'Not specified')
+        .replace(/{{PAYOUT_METHOD}}/g, affiliateData.payoutMethod || 'Not specified')
+        .replace(/{{REASON}}/g, affiliateData.reason ? affiliateData.reason.replace(/\n/g, '<br>') : 'Not provided');
+
+      // Use support email for affiliate applications (admin can reply)
+      const success = await this.sendEmail({
+        to: 'ventechgadgets@gmail.com',
+        subject: `New Affiliate Application: ${affiliateData.fullName} - ${affiliateData.promotionChannel}`,
+        html: template,
+      }, true); // true = use support email
+
+      return { success };
+    } catch (error) {
+      console.error('Error sending affiliate application email:', error);
+      return { success: false, error: 'Failed to send affiliate application email' };
+    }
+  }
 }
 
 const emailService = new EmailService();
@@ -597,5 +667,6 @@ const emailService = new EmailService();
 export const sendInvestmentEmail = emailService.sendInvestmentEmail.bind(emailService);
 export const sendContactEmail = emailService.sendContactEmail.bind(emailService);
 export const sendBulkOrderEmail = emailService.sendBulkOrderEmail.bind(emailService);
+export const sendAffiliateApplicationEmail = emailService.sendAffiliateApplicationEmail.bind(emailService);
 
 export default emailService;
