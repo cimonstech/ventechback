@@ -228,7 +228,7 @@ class EnhancedEmailService {
       const r2AccountId = process.env.R2_ACCOUNT_ID;
       
       // Use direct logo URL
-      const logoUrl = 'https://files.ventechgadgets.com/ventech-logomain.png';
+      const logoUrl = 'https://files.ventechgadgets.com/ventech_logo_1.png';
       
       // Determine shipping label: "Delivery" for regular orders, "Shipment" for pre-orders
       const shippingLabel = isPreOrder ? 'Shipment' : 'Delivery';

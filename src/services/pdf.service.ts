@@ -126,7 +126,7 @@ class PDFService {
       const r2AccountId = process.env.R2_ACCOUNT_ID;
       
       // Use direct logo URL
-      const logoUrl = 'https://files.ventechgadgets.com/ventech-logomain.png';
+      const logoUrl = 'https://files.ventechgadgets.com/ventech_logo_1.png';
       
       console.log('Downloading logo from:', logoUrl);
       const logoResponse = await axios.get(logoUrl, { 
