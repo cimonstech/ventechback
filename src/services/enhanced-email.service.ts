@@ -238,6 +238,16 @@ class EnhancedEmailService {
         ? "We've received your order and are preparing it for shipment."
         : "We've received your order and are preparing it for delivery.";
       
+      // Format delivery details
+      const deliveryAddress = orderData.delivery_address || {};
+      const recipientName = deliveryAddress.recipient_name || deliveryAddress.full_name || orderData.customer_name || 'N/A';
+      const recipientNumber = deliveryAddress.recipient_number || deliveryAddress.phone || orderData.customer_phone || 'N/A';
+      const deliveryLocation = deliveryAddress.location || deliveryAddress.street_address || deliveryAddress.street || 'N/A';
+      const deliveryRegion = deliveryAddress.region || deliveryAddress.city || 'N/A';
+      const alternateContact = deliveryAddress.alternate_contact_number 
+        ? `<p style="font-size:13px; color:#3A3A3A; margin:5px 0;"><strong>Alternate Contact:</strong> ${deliveryAddress.alternate_contact_number}</p>`
+        : '';
+
       // Replace placeholders with actual data
       template = template
         .replace(/{{ORDER_NUMBER}}/g, orderData.order_number || 'N/A')
@@ -258,6 +268,11 @@ class EnhancedEmailService {
         .replace(/{{LOGO_URL}}/g, logoUrl)
         .replace(/{{DELIVERY_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
         .replace(/{{SHIPPING_ADDRESS}}/g, this.formatAddress(orderData.delivery_address))
+        .replace(/{{RECIPIENT_NAME}}/g, recipientName)
+        .replace(/{{RECIPIENT_NUMBER}}/g, recipientNumber)
+        .replace(/{{DELIVERY_LOCATION}}/g, deliveryLocation)
+        .replace(/{{DELIVERY_REGION}}/g, deliveryRegion)
+        .replace(/{{ALTERNATE_CONTACT}}/g, alternateContact)
         .replace(/{{ITEMS_LIST}}/g, this.formatOrderItems(orderData.items || []))
         .replace(/{{ORDER_ITEMS}}/g, this.formatOrderItems(orderData.items || []))
         .replace(/{{ORDER_NOTES}}/g, orderData.notes ? `<div style="background-color: #f9f9f9; border-radius: 8px; padding: 15px; margin: 20px 0;"><h3 style="color: #1A1A1A; font-size: 16px; margin: 0 0 10px 0;">Order Notes:</h3><p style="color: #3A3A3A; font-size: 14px; margin: 0;">${orderData.notes}</p></div>` : '')
