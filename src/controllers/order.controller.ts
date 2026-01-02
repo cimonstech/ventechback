@@ -331,8 +331,9 @@ export class OrderController {
 
       if (orderError) throw orderError;
 
-      // Extract is_pre_order from shipping_address if it exists there
-      const isPreOrder = orderData.is_pre_order || orderData.shipping_address?.is_pre_order || false;
+      // Extract is_pre_order from updated orderData (reuse existing isPreOrder variable from above)
+      // Update isPreOrder with value from orderData if available, otherwise keep existing value
+      const finalIsPreOrder = orderData.is_pre_order || orderData.shipping_address?.is_pre_order || isPreOrder;
       const preOrderShippingOption = orderData.pre_order_shipping_option || orderData.shipping_address?.pre_order_shipping_option || null;
       const estimatedArrivalDate = orderData.estimated_arrival_date || orderData.shipping_address?.estimated_arrival_date || null;
 
@@ -359,7 +360,7 @@ export class OrderController {
             customer_email: customerEmail,
             items: orderData.order_items || [],
             delivery_address: orderData.shipping_address || orderData.delivery_address, // For email template compatibility
-            is_pre_order: isPreOrder,
+            is_pre_order: finalIsPreOrder,
             pre_order_shipping_option: preOrderShippingOption,
             estimated_arrival_date: estimatedArrivalDate,
           };
