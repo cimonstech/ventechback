@@ -234,6 +234,84 @@ export class OrderController {
       const { id } = req.params;
       const { status, tracking_number, notes } = req.body;
 
+      // ✅ Get existing order to check previous status and prevent double stock restoration
+      const { data: existingOrder, error: fetchError } = await supabaseAdmin
+        .from('orders')
+        .select(`
+          *,
+          order_items:order_items(*)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Extract is_pre_order from existing order
+      const isPreOrder = existingOrder.is_pre_order || existingOrder.shipping_address?.is_pre_order || false;
+      const previousStatus = existingOrder.status;
+
+      // ✅ Check if status is changing to "cancelled" and restore stock
+      // Only restore if:
+      // 1. New status is "cancelled"
+      // 2. Previous status was NOT "cancelled" (prevent double restoration)
+      // 3. Order is NOT a pre-order (pre-orders don't decrement stock)
+      // 4. Payment status is NOT "refunded" (refunds should not restore stock)
+      const isChangingToCancelled = status === 'cancelled' && previousStatus !== 'cancelled';
+      const isRefunded = existingOrder.payment_status === 'refunded';
+      
+      if (isChangingToCancelled && !isPreOrder && !isRefunded) {
+        try {
+          const orderItems = existingOrder.order_items || [];
+          console.log(`🔄 Restoring stock for ${orderItems.length} items in cancelled order ${existingOrder.order_number}`);
+          
+          for (const item of orderItems) {
+            if (!item.product_id || !item.quantity) {
+              console.warn(`⚠️ Skipping item with missing product_id or quantity:`, item);
+              continue;
+            }
+            
+            // Get current stock
+            const { data: product, error: productError } = await supabaseAdmin
+              .from('products')
+              .select('stock_quantity, in_stock, name')
+              .eq('id', item.product_id)
+              .single();
+            
+            if (!productError && product) {
+              const currentStock = product.stock_quantity || 0;
+              const restoredStock = currentStock + item.quantity; // ✅ Handle multiple quantities
+              const newInStock = restoredStock > 0;
+              
+              // Restore stock atomically
+              const { error: restoreError } = await supabaseAdmin
+                .from('products')
+                .update({
+                  stock_quantity: restoredStock,
+                  in_stock: newInStock,
+                })
+                .eq('id', item.product_id);
+              
+              if (restoreError) {
+                console.error(`❌ Failed to restore stock for product ${item.product_id}:`, restoreError);
+              } else {
+                console.log(`✅ Restored ${item.quantity} unit(s) for product ${item.product_id} (${product.name}): ${currentStock} → ${restoredStock}`);
+              }
+            } else {
+              console.error(`❌ Error fetching product ${item.product_id} for stock restoration:`, productError);
+            }
+          }
+        } catch (restoreError) {
+          console.error('❌ Error restoring stock for cancelled order:', restoreError);
+          // Don't fail status update if stock restoration fails
+        }
+      } else if (isChangingToCancelled && isPreOrder) {
+        console.log('⏭️ Skipping stock restoration for pre-order (stock was never deducted)');
+      } else if (isChangingToCancelled && isRefunded) {
+        console.log('⏭️ Skipping stock restoration for refunded order (refunds should not restore stock)');
+      } else if (isChangingToCancelled && previousStatus === 'cancelled') {
+        console.log('⏭️ Skipping stock restoration (order was already cancelled - preventing double restoration)');
+      }
+
       // Update order
       const { data: orderData, error: orderError } = await supabaseAdmin
         .from('orders')

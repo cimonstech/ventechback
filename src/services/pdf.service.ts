@@ -395,7 +395,7 @@ class PDFService {
        .text('Delivery Details:', 50, contentY + 84) // Reduced spacing
        .fontSize(9) // Reduced from 10
        .fillColor('#1A1A1A')
-       .text(this.formatDeliveryDetails(orderData.shipping_address || orderData.delivery_address), 50, contentY + 95, { width: 300, lineGap: 2 }); // Reduced spacing and lineGap
+       .text(this.formatDeliveryDetails(orderData.shipping_address || orderData.delivery_address), 50, contentY + 95, { width: 450, lineGap: 4 }); // Increased width and lineGap for better visibility
   }
 
   private addOrderItems(doc: any, orderData: OrderData): number {
@@ -614,14 +614,14 @@ class PDFService {
     // New delivery structure
     if (address.gadget_name || address.recipient_name) {
       const parts: string[] = [];
-      if (address.gadget_name) parts.push(`Gadget: ${address.gadget_name}`);
-      if (address.recipient_name) parts.push(`Recipient: ${address.recipient_name}`);
-      if (address.recipient_number) parts.push(`Phone: ${address.recipient_number}`);
-      if (address.recipient_location) parts.push(`Location: ${address.recipient_location}`);
-      if (address.recipient_region) parts.push(`Region: ${address.recipient_region}`);
-      if (address.alternate_contact_number) parts.push(`Alternate: ${address.alternate_contact_number}`);
-      if (address.country) parts.push(address.country);
-      return parts.join('\n');
+      if (address.gadget_name) parts.push(`Gadget Name: ${address.gadget_name}`);
+      if (address.recipient_name) parts.push(`Recipient Name: ${address.recipient_name}`);
+      if (address.recipient_number) parts.push(`Recipient Number: ${address.recipient_number}`);
+      if (address.recipient_location) parts.push(`Recipient Location: ${address.recipient_location}`);
+      if (address.recipient_region) parts.push(`Recipient Region: ${address.recipient_region}`);
+      if (address.alternate_contact_number) parts.push(`Alternate Contact: ${address.alternate_contact_number}`);
+      if (address.country) parts.push(`Country: ${address.country}`);
+      return parts.length > 0 ? parts.join('\n') : 'No delivery details provided';
     }
     
     // Legacy structure (fallback)
