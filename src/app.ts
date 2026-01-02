@@ -22,7 +22,9 @@ const app: Application = express();
 
 // Trust proxy - Required for rate limiting behind reverse proxy (nginx, load balancer, etc.)
 // This allows Express to correctly identify client IPs from X-Forwarded-For headers
-app.set('trust proxy', true);
+// Set to 1 to trust only the first proxy (nginx) - more secure for rate limiting
+// In production behind nginx, we trust only the first hop (nginx itself)
+app.set('trust proxy', 1);
 
 // Middleware
 const allowedOrigins: string[] = process.env.FRONTEND_URL
