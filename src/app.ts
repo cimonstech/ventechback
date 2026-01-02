@@ -20,6 +20,10 @@ import { publicRateLimiter } from './middleware/rateLimit.middleware';
 
 const app: Application = express();
 
+// Trust proxy - Required for rate limiting behind reverse proxy (nginx, load balancer, etc.)
+// This allows Express to correctly identify client IPs from X-Forwarded-For headers
+app.set('trust proxy', true);
+
 // Middleware
 const allowedOrigins: string[] = process.env.FRONTEND_URL
   ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
