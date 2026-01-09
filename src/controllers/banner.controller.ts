@@ -122,6 +122,7 @@ export const createBanner = async (req: AuthRequest, res: Response) => {
       active: bannerData.active !== undefined ? bannerData.active : true,
       start_date: bannerData.start_date || null,
       end_date: bannerData.end_date || null,
+      text_color: bannerData.text_color || '#FFFFFF',
     };
 
     // Only include type if the column exists (check first)
@@ -166,19 +167,32 @@ export const updateBanner = async (req: AuthRequest, res: Response) => {
     if (updates.active !== undefined) cleanUpdates.active = updates.active;
     if (updates.start_date !== undefined) cleanUpdates.start_date = updates.start_date;
     if (updates.end_date !== undefined) cleanUpdates.end_date = updates.end_date;
-
+    
+    // Handle text_color
+    if (updates.text_color !== undefined) {
+      const colorValue = String(updates.text_color).trim();
+      if (colorValue && colorValue !== 'null' && colorValue !== 'undefined') {
+        cleanUpdates.text_color = colorValue;
+      } else {
+        cleanUpdates.text_color = null;
+      }
+    }
+    
     const { data, error } = await supabaseAdmin
       .from('banners')
       .update(cleanUpdates)
       .eq('id', id)
-      .select()
+      .select('*')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Update banner error:', error);
+      throw error;
+    }
     if (!data) {
       return errorResponse(res, 'Banner not found', 404);
     }
-
+    
     return successResponse(res, data, 'Banner updated successfully');
   } catch (error: any) {
     console.error('Update banner error:', error);
