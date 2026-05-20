@@ -28,7 +28,7 @@ export class AffiliateClient {
   private baseUrl: string;
   private jwtToken: string;
 
-  constructor(jwtToken: string, baseUrl: string = 'http://localhost:3000/api/affiliate') {
+  constructor(jwtToken: string, baseUrl: string = '/api/affiliate') {
     this.jwtToken = jwtToken;
     this.baseUrl = baseUrl;
   }
@@ -38,7 +38,7 @@ export class AffiliateClient {
    */
   private async request<T = any>(endpoint: string, options: RequestOptions): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
 
@@ -53,11 +53,11 @@ export class AffiliateClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || `API Error: ${response.status}`);
+      const errorData = await response.json().catch(() => ({})) as any;
+      throw new Error(errorData.message || `API Error: ${response.status}`);
     }
 
-    return response.json();
+    return response.json() as Promise<T>;
   }
 
   // ==================== PUBLIC ENDPOINTS ====================
@@ -180,6 +180,40 @@ export class AffiliateClient {
   }
 
   /**
+   * Generate a product affiliate link
+   */
+  async generateProductAffiliateLink(data: {
+    productId?: string;
+    product_id?: string;
+  }): Promise<ApiResponse<{
+    id: string;
+    generated_url: string;
+    generatedUrl: string;
+    referral_code: string;
+    referralCode: string;
+    product_id: string;
+    productId: string;
+    clicks: number;
+    conversions: number;
+    created_at: string;
+    createdAt: string;
+  }>> {
+    return this.request('/links/generate', {
+      method: 'POST',
+      body: {
+        productId: data.productId ?? data.product_id,
+      },
+    });
+  }
+
+  /**
+   * Get generated product affiliate links
+   */
+  async getProductAffiliateLinks(): Promise<ApiResponse<any[]>> {
+    return this.request('/links/product', { method: 'GET' });
+  }
+
+  /**
    * Delete a referral link
    */
   async deleteReferralLink(linkId: string): Promise<ApiResponse> {
@@ -281,150 +315,43 @@ export class AffiliateClient {
 
 /**
  * Example 1: React Hook for Dashboard
+ * Note: This is frontend code - implement in your React app
+ *
+ * export const useDashboardData = (jwtToken: string) => {
+ *   const [stats, setStats] = React.useState(null);
+ *   const [chartData, setChartData] = React.useState(null);
+ *   const [loading, setLoading] = React.useState(true);
+ *   const [error, setError] = React.useState(null);
+ *
+ *   React.useEffect(() => {
+ *     const fetchData = async () => {
+ *       try {
+ *         const client = new AffiliateClient(jwtToken);
+ *         const [statsRes, chartRes] = await Promise.all([
+ *           client.getDashboardStats(),
+ *           client.getChartData(),
+ *         ]);
+ *
+ *         setStats(statsRes.data);
+ *         setChartData(chartRes.data);
+ *       } catch (err: any) {
+ *         setError(err.message);
+ *       } finally {
+ *         setLoading(false);
+ *       }
+ *     };
+ *
+ *     fetchData();
+ *   }, [jwtToken]);
+ *
+ *   return { stats, chartData, loading, error };
+ * };
  */
-export const useDashboardData = (jwtToken: string) => {
-  const [stats, setStats] = React.useState(null);
-  const [chartData, setChartData] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState(null);
-
-  React.useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const client = new AffiliateClient(jwtToken);
-        const [statsRes, chartRes] = await Promise.all([
-          client.getDashboardStats(),
-          client.getChartData(),
-        ]);
-
-        setStats(statsRes.data);
-        setChartData(chartRes.data);
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [jwtToken]);
-
-  return { stats, chartData, loading, error };
-};
 
 /**
- * Example 2: React Component using AffiliateClient
+ * Example 2: Basic usage
+ *
+ * const client = new AffiliateClient(jwtToken);
+ * const stats = await client.getDashboardStats();
+ * console.log('Total earnings:', stats.data.totalEarnings);
  */
-const DashboardComponent: React.FC<{ jwtToken: string }> = ({ jwtToken }) => {
-  const client = new AffiliateClient(jwtToken);
-  const { stats, chartData, loading } = useDashboardData(jwtToken);
-
-  const handleCreateLink = async () => {
-    try {
-      const newLink = await client.createReferralLink({
-        name: 'My YouTube Campaign',
-        source: 'youtube',
-      });
-
-      // Copy link to clipboard
-      navigator.clipboard.writeText(newLink.data.url);
-      alert('Link copied to clipboard!');
-    } catch (error) {
-      alert(`Error: ${error.message}`);
-    }
-  };
-
-  const handleRequestPayout = async () => {
-    try {
-      // Get payment methods first
-      const methodsRes = await client.getPaymentMethods();
-      const defaultMethod = methodsRes.data?.[0];
-
-      if (!defaultMethod) {
-        alert('Add a payment method first');
-        return;
-      }
-
-      // Request payout
-      const payout = await client.requestPayout({
-        amount: 100,
-        methodId: defaultMethod.id,
-      });
-
-      alert(`Payout requested: $${payout.data.amount}`);
-    } catch (error) {
-      alert(`Error: ${error.message}`);
-    }
-  };
-
-  if (loading) return <div>Loading...</div>;
-
-  return (
-    <div>
-      <h1>Affiliate Dashboard</h1>
-
-      {/* Stats */}
-      <div className="stats">
-        <div>Total Earnings: ${stats?.totalEarnings}</div>
-        <div>Pending: ${stats?.pendingEarnings}</div>
-        <div>Clicks: {stats?.totalClicks}</div>
-        <div>Conversions: {stats?.totalConversions}</div>
-      </div>
-
-      {/* Actions */}
-      <button onClick={handleCreateLink}>Create Link</button>
-      <button onClick={handleRequestPayout}>Request Payout</button>
-    </div>
-  );
-};
-
-/**
- * Example 3: Using in Context API for app-wide access
- */
-const AffiliateContext = React.createContext<AffiliateClient | null>(null);
-
-export const AffiliateProvider: React.FC<{ children: React.ReactNode; token: string }> = ({
-  children,
-  token,
-}) => {
-  const client = new AffiliateClient(token);
-
-  return (
-    <AffiliateContext.Provider value={client}>{children}</AffiliateContext.Provider>
-  );
-};
-
-export const useAffiliate = () => {
-  const context = React.useContext(AffiliateContext);
-  if (!context) {
-    throw new Error('useAffiliate must be used within AffiliateProvider');
-  }
-  return context;
-};
-
-/**
- * Example 4: Component that uses the context
- */
-const EarningsPage: React.FC = () => {
-  const client = useAffiliate();
-  const [earnings, setEarnings] = React.useState([]);
-
-  React.useEffect(() => {
-    client.getEarnings({ status: 'pending' }).then((res) => {
-      setEarnings(res.data || []);
-    });
-  }, [client]);
-
-  return (
-    <div>
-      <h2>Pending Earnings</h2>
-      <ul>
-        {earnings.map((earning: any) => (
-          <li key={earning.id}>
-            {earning.productName}: ${earning.amount}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-};

@@ -1,6 +1,11 @@
 import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
+import {
+  resendApiKey,
+  resendSupportEmail,
+  resendNoReplyEmail,
+} from '../config/env';
 
 interface EmailOptions {
   to: string;
@@ -19,25 +24,18 @@ class EmailService {
   private noreplyEmail: string = '';
 
   constructor() {
-    const resendApiKey = process.env.RESEND_API_KEY;
-
-    // ✅ Always set defaults first (avoids TS issues)
     this.supportEmail =
-      process.env.RESEND_SUPPORT_EMAIL ||
-      'VENTECH GADGETS <support@ventechgadgets.com>';
+      resendSupportEmail || 'VENTECH GADGETS <support@ventechgadgets.com>';
 
     this.noreplyEmail =
-      process.env.RESEND_NOREPLY_EMAIL ||
-      'VENTECH GADGETS <noreply@ventechgadgets.com>';
+      resendNoReplyEmail || 'VENTECH GADGETS <noreply@ventechgadgets.com>';
 
-    // ✅ Disable email instead of crashing
     if (!resendApiKey) {
       console.warn('⚠️ Email service disabled (no RESEND_API_KEY)');
       this.resend = null;
       return;
     }
 
-    // ✅ Only initialize if key exists
     this.resend = new Resend(resendApiKey);
 
     console.log('✅ Resend email service initialized');
@@ -579,7 +577,7 @@ This bulk order request was submitted through the VENTECH website.
         <img src="${item.product.image_url}" alt="${item.product.name}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; margin-right: 15px;">
         <div>
           <h4 style="margin: 0 0 5px 0; color: #1A1A1A;">${item.product.name}</h4>
-          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${item.product.original_price.toFixed(2)}</p>
+          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${Number(item.product.price || item.product.original_price || 0).toFixed(2)}</p>
         </div>
       </div>
     `).join('');
@@ -591,7 +589,7 @@ This bulk order request was submitted through the VENTECH website.
         <img src="${item.image_url}" alt="${item.name}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; margin-right: 15px;">
         <div>
           <h4 style="margin: 0 0 5px 0; color: #1A1A1A;">${item.name}</h4>
-          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${(item.discount_price || item.original_price).toFixed(2)}</p>
+          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${Number(item.discount_price || item.price || item.original_price || 0).toFixed(2)}</p>
         </div>
       </div>
     `).join('');

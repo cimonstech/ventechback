@@ -28,6 +28,18 @@ export interface ReferralLink {
   updatedAt: string;
 }
 
+export interface AffiliateLink {
+  id: string;
+  affiliateId: string;
+  productId: string;
+  referralCode: string;
+  generatedUrl: string;
+  clicks: number;
+  conversions: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Earning {
   id: string;
   affiliateId: string;
@@ -76,6 +88,19 @@ export interface ClickLog {
   updatedAt: string;
 }
 
+export interface AffiliateClick {
+  id: string;
+  affiliateId: string;
+  referralCode: string;
+  ip: string;
+  userAgent: string;
+  source: string;
+  landingPage?: string;
+  converted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CommissionRates {
   starter: number;
   pro: number;
@@ -100,7 +125,7 @@ export interface ChartData {
   clicks: number[];
   conversions: number[];
   isEmpty?: boolean;
-  dataType?: 'real' | 'empty' | 'placeholder';
+  dataType?: 'real' | 'empty';
   message?: string;
 }
 

@@ -363,7 +363,7 @@ export class PaymentController {
 
             // Calculate totals if not provided
             const items = checkoutData.items || [];
-            const subtotal = checkoutData.subtotal || items.reduce((sum: number, item: any) => sum + (item.subtotal || (item.quantity * (item.discount_price || item.original_price || 0))), 0);
+            const subtotal = checkoutData.subtotal || items.reduce((sum: number, item: any) => sum + (item.subtotal || (item.quantity * (item.discount_price || item.price || item.original_price || 0))), 0);
             const deliveryFee = checkoutData.delivery_option?.price || checkoutData.delivery_fee || 0;
             const tax = checkoutData.tax || 0;
             const total = checkoutData.total || (subtotal + deliveryFee + tax);
@@ -374,8 +374,8 @@ export class PaymentController {
               product_name: item.name,
               product_image: item.thumbnail || item.image_url || '',
               quantity: item.quantity,
-              unit_price: item.discount_price || item.original_price || 0,
-              subtotal: item.subtotal || (item.quantity * (item.discount_price || item.original_price || 0)),
+              unit_price: item.discount_price || item.price || item.original_price || 0,
+              subtotal: item.subtotal || (item.quantity * (item.discount_price || item.price || item.original_price || 0)),
               selected_variants: item.selected_variants || {},
             }));
 

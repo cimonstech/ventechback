@@ -1389,32 +1389,24 @@ export class OrderController {
         stock_updated: true, // Stock is updated above
       });
 
-      res.json({
-        success: true,
-        message: 'Order created successfully',
-        data: orderData,
-      });
-
-     if (orderData) {
       const affiliateRef = req.cookies?.affiliate_ref;
-      if (affiliateRef && req.user) {
+      if (affiliateRef) {
+        console.log(`[AFFILIATE] Order attribution triggered for order ${orderData.id} with referral: ${affiliateRef}`);
         try {
           const orderAmount = orderData.subtotal || orderData.total || 0;
-
           await affiliateService.attributeEarningsForOrder(
             orderData.id,
-            req.user.id,
+            req.user?.id || null,
             affiliateRef,
             orderAmount
           );
         } catch (error) {
-          console.error('Affiliate attribution failed:', error);
+          console.error('[AFFILIATE] Affiliate attribution failed:', error);
           // Do NOT block order creation
         }
       }
-    }
-    return successResponse(res, orderData, 'Order created successfully', 201);
 
+      return successResponse(res, orderData, 'Order created successfully', 201);
     } catch (error: any) {
       console.error('❌ Error creating order:', {
         error,

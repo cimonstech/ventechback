@@ -12,6 +12,26 @@ router.post('/', affiliateController.submitAffiliateApplication.bind(affiliateCo
 // Protected routes - require authentication and active affiliate status
 router.use(authenticate, requireAffiliate);
 
+// Add route debugging middleware
+router.use((req, res, next) => {
+  console.log(`🔍 AFFILIATE ROUTE: ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Test endpoint to verify routes are working
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Affiliate routes are working',
+    endpoints: {
+      links: 'GET /api/affiliate/links',
+      earnings: 'GET /api/affiliate/earnings',
+      earningsSummary: 'GET /api/affiliate/earnings/summary',
+      generateLink: 'POST /api/affiliate/links/generate'
+    }
+  });
+});
+
 // Dashboard routes
 router.get(
   '/dashboard/stats',
@@ -26,8 +46,14 @@ router.get(
   affiliateController.getRecentEarnings.bind(affiliateController)
 );
 
+// Alias routes for compatibility (some frontends may call these)
+router.get('/stats', affiliateController.getDashboardStats.bind(affiliateController));
+router.get('/stats/chart', affiliateController.getChartData.bind(affiliateController));
+
 // Referral links routes
 router.get('/links', affiliateController.getLinks.bind(affiliateController));
+router.get('/links/product', affiliateController.getProductLinks.bind(affiliateController));
+router.post('/links/generate', affiliateController.generateLink.bind(affiliateController));
 router.post('/links', affiliateController.createLink.bind(affiliateController));
 router.get('/links/:id/stats', affiliateController.getLinkStats.bind(affiliateController));
 router.put('/links/:id', affiliateController.updateLink.bind(affiliateController));
@@ -45,6 +71,8 @@ router.get('/payouts', affiliateController.getPayouts.bind(affiliateController))
 router.get('/payouts/summary', affiliateController.getPayoutsSummary.bind(affiliateController));
 router.post('/payouts/request', affiliateController.requestPayout.bind(affiliateController));
 router.post('/payouts/:id/cancel', affiliateController.cancelPayout.bind(affiliateController));
+router.get('/payouts/:payoutId/verify', affiliateController.verifyPayoutStatus.bind(affiliateController));
+router.post('/payouts/:payoutId/retry', affiliateController.retryFailedPayout.bind(affiliateController));
 
 // Payment methods routes
 router.get(
@@ -86,5 +114,11 @@ router.put('/settings', affiliateController.updateAffiliateSettings.bind(affilia
 router.get('/user/profile', affiliateController.getUserProfile.bind(affiliateController));
 router.put('/user/profile', affiliateController.updateUserProfile.bind(affiliateController));
 router.get('/user/tier', affiliateController.getUserAffiliateTier.bind(affiliateController));
+
+// Admin payout processing routes (should be protected by admin middleware in production)
+router.post(
+  '/admin/payouts/process',
+  affiliateController.processPendingPayouts.bind(affiliateController)
+);
 
 export default router;

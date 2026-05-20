@@ -8,16 +8,25 @@ export const trackAffiliateClick = async (req: Request, res: Response, next: Nex
     const { ref } = req.query;
 
     if (ref && typeof ref === 'string') {
-      // Track the click
-      const ip = req.ip || 'unknown';
+      // Validate referral code format (basic check)
+      if (!ref.startsWith('AFF') || ref.length < 10) {
+        console.log(`[AFFILIATE] Invalid referral code format: ${ref}`);
+        return next();
+      }
+
+      // Track the click with landing page
+      const ip = req.ip || req.connection.remoteAddress || 'unknown';
       const userAgent = req.headers['user-agent'] || 'unknown';
       const source = typeof req.query.utm_source === 'string' ? req.query.utm_source : 'direct';
+      const landingPage = req.originalUrl || req.url;
 
-      await affiliateService.trackClick(ref, ip, userAgent, source);
+      console.log(`[AFFILIATE] Referral detected: ${ref} from IP: ${ip} on page: ${landingPage}`);
 
-      // Set cookie for 90-day tracking
+      await affiliateService.trackClick(ref, ip, userAgent, source, landingPage);
+
+      // Set cookie for 30-day tracking
       res.cookie('affiliate_ref', ref, {
-        maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
@@ -25,17 +34,19 @@ export const trackAffiliateClick = async (req: Request, res: Response, next: Nex
 
       if (source && source !== 'direct') {
         res.cookie('affiliate_source', source, {
-          maxAge: 90 * 24 * 60 * 60 * 1000,
+          maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
           httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
         });
       }
+
+      console.log(`[AFFILIATE] Cookie set for referral: ${ref}`);
     }
 
     next();
   } catch (error) {
-    console.error('Click tracking error:', error);
+    console.error('[AFFILIATE] Click tracking error:', error);
     next(); // Don't block request on tracking failure
   }
 };

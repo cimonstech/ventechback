@@ -2,7 +2,9 @@
 
 import { Request, Response } from 'express';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/responseHandlers';
+import { normalizePaymentMethod } from '../utils/payoutUtils';
 import { affiliateService } from '../services/affiliate.service';
+import { affiliatePayoutProcessor } from '../services/affiliatePayoutProcessor.service';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { sendAffiliateApplicationEmail } from '../services/email.service';
 
@@ -159,6 +161,8 @@ export class AffiliateController {
    */
   async getEarnings(req: any, res: Response) {
     try {
+      console.log('🔍 getEarnings called for user:', req.user?.id);
+
       const { status, page = '1', limit = '20' } = req.query;
 
       const { data: affiliate } = await supabaseAdmin
@@ -168,15 +172,19 @@ export class AffiliateController {
         .single();
 
       if (!affiliate) {
+        console.error('❌ Affiliate not found for user:', req.user.id);
         return errorResponse(res, 'Affiliate not found', 404);
       }
 
+      console.log('✅ Found affiliate:', affiliate.id);
       const result = await affiliateService.getEarnings(
         affiliate.id,
         status as string,
         parseInt(page as string),
         parseInt(limit as string)
       );
+
+      console.log('✅ Retrieved earnings:', result.earnings?.length || 0, 'total:', result.total);
 
       return paginatedResponse(
         res,
@@ -190,7 +198,7 @@ export class AffiliateController {
         'Earnings retrieved successfully'
       );
     } catch (error) {
-      console.error('Earnings error:', error);
+      console.error('❌ Earnings error:', error);
       return errorResponse(res, 'Failed to fetch earnings', 500);
     }
   }
@@ -200,6 +208,8 @@ export class AffiliateController {
    */
   async getEarningsSummary(req: any, res: Response) {
     try {
+      console.log('🔍 getEarningsSummary called for user:', req.user?.id);
+
       const { data: affiliate } = await supabaseAdmin
         .from('affiliates')
         .select('id')
@@ -207,13 +217,17 @@ export class AffiliateController {
         .single();
 
       if (!affiliate) {
+        console.error('❌ Affiliate not found for user:', req.user.id);
         return errorResponse(res, 'Affiliate not found', 404);
       }
 
+      console.log('✅ Found affiliate:', affiliate.id);
       const summary = await affiliateService.getEarningsSummary(affiliate.id);
+      console.log('✅ Retrieved earnings summary:', summary);
+
       return successResponse(res, summary, 'Earnings summary retrieved successfully');
     } catch (error) {
-      console.error('Earnings summary error:', error);
+      console.error('❌ Earnings summary error:', error);
       return errorResponse(res, 'Failed to fetch earnings summary', 500);
     }
   }
@@ -317,6 +331,35 @@ export class AffiliateController {
    */
   async getLinks(req: any, res: Response) {
     try {
+      console.log('🔍 getLinks called for user:', req.user?.id);
+
+      const { data: affiliate } = await supabaseAdmin
+        .from('affiliates')
+        .select('id')
+        .eq('user_id', req.user.id)
+        .single();
+
+      if (!affiliate) {
+        console.error('❌ Affiliate not found for user:', req.user.id);
+        return errorResponse(res, 'Affiliate not found', 404);
+      }
+
+      console.log('✅ Found affiliate:', affiliate.id);
+      const links = await affiliateService.getReferralLinks(affiliate.id);
+      console.log('✅ Retrieved links:', links?.length || 0);
+
+      return successResponse(res, links, 'Referral links retrieved successfully');
+    } catch (error) {
+      console.error('❌ Links error:', error);
+      return errorResponse(res, 'Failed to fetch links', 500);
+    }
+  }
+
+  /**
+   * Get generated product affiliate links
+   */
+  async getProductLinks(req: any, res: Response) {
+    try {
       const { data: affiliate } = await supabaseAdmin
         .from('affiliates')
         .select('id')
@@ -327,11 +370,11 @@ export class AffiliateController {
         return errorResponse(res, 'Affiliate not found', 404);
       }
 
-      const links = await affiliateService.getReferralLinks(affiliate.id);
-      return successResponse(res, links, 'Referral links retrieved successfully');
+      const links = await affiliateService.getAffiliateLinks(affiliate.id);
+      return successResponse(res, links, 'Product affiliate links retrieved successfully');
     } catch (error) {
-      console.error('Links error:', error);
-      return errorResponse(res, 'Failed to fetch links', 500);
+      console.error('❌ Product links error:', error);
+      return errorResponse(res, 'Failed to fetch product links', 500);
     }
   }
 
@@ -361,6 +404,72 @@ export class AffiliateController {
     } catch (error) {
       console.error('Create link error:', error);
       return errorResponse(res, 'Failed to create link', 500);
+    }
+  }
+
+  /**
+   * Generate affiliate URL for a product and store it in affiliate_links
+   */
+  async generateLink(req: any, res: Response) {
+    try {
+      const productId = req.body.productId || req.body.product_id;
+      console.log('✅ generateLink called with productId:', productId);
+
+      if (!productId || typeof productId !== 'string') {
+        console.error('❌ Invalid productId:', productId);
+        return errorResponse(res, 'productId or product_id is required and must be a string', 400);
+      }
+
+      const { data: affiliate } = await supabaseAdmin
+        .from('affiliates')
+        .select('id, referral_code')
+        .eq('user_id', req.user.id)
+        .single();
+
+      if (!affiliate) {
+        console.error('❌ Affiliate not found for user:', req.user.id);
+        return errorResponse(res, 'Affiliate not found', 403);
+      }
+
+      console.log('✅ Affiliate found:', affiliate.id);
+
+      const link = await affiliateService.generateProductAffiliateLink(
+        affiliate.id,
+        productId
+      );
+
+      console.log('✅ Link generated from service:', JSON.stringify(link, null, 2));
+      console.log('✅ Link.generatedUrl:', link.generatedUrl);
+      console.log('✅ Link.referralCode:', link.referralCode);
+      console.log('✅ Link.productId:', link.productId);
+
+      // Return response with generated URL in the data payload
+      const responsePayload = {
+        id: link.id,
+        generated_url: link.generatedUrl,
+        generatedUrl: link.generatedUrl,
+        referral_code: link.referralCode,
+        referralCode: link.referralCode,
+        product_id: link.productId,
+        productId: link.productId,
+        clicks: link.clicks,
+        conversions: link.conversions,
+        created_at: link.createdAt,
+        createdAt: link.createdAt,
+      };
+
+      console.log('✅ Final response payload:', JSON.stringify(responsePayload, null, 2));
+
+      return successResponse(
+        res,
+        responsePayload,
+        'Affiliate link generated successfully',
+        201
+      );
+    } catch (error) {
+      console.error('❌ Generate link error:', error);
+      const message = error instanceof Error ? error.message : 'Failed to generate affiliate link';
+      return errorResponse(res, message, 400);
     }
   }
 
@@ -590,6 +699,8 @@ export class AffiliateController {
    */
   async getPayoutsSummary(req: any, res: Response) {
     try {
+      console.log('🔍 getPayoutsSummary called for user:', req.user?.id);
+
       const { data: affiliate } = await supabaseAdmin
         .from('affiliates')
         .select('id')
@@ -597,13 +708,20 @@ export class AffiliateController {
         .single();
 
       if (!affiliate) {
-        return errorResponse(res, 'Affiliate not found', 404);
+        console.error('❌ Affiliate not found for user:', req.user.id);
+        return errorResponse(res, 'Affiliate not found', 403);
       }
 
+      console.log('✅ Found affiliate:', affiliate.id);
       const summary = await affiliateService.getPayoutsSummary(affiliate.id);
+      console.log('✅ Retrieved payout summary:', summary);
+
       return successResponse(res, summary, 'Payout summary retrieved successfully');
     } catch (error) {
-      console.error('Payout summary error:', error);
+      console.error('❌ Payout summary error:', error);
+      if (error instanceof Error) {
+        console.error('   Stack:', error.stack);
+      }
       return errorResponse(res, 'Failed to fetch payout summary', 500);
     }
   }
@@ -665,24 +783,44 @@ export class AffiliateController {
    */
   async getProducts(req: any, res: Response) {
     try {
-      const { data: affiliate } = await supabaseAdmin
+      console.log('📦 [getProducts] Fetching affiliate tier for user:', req.user?.id);
+
+      const { data: affiliate, error: affiliateError } = await supabaseAdmin
         .from('affiliates')
         .select('tier')
         .eq('user_id', req.user.id)
         .single();
 
-      if (!affiliate) {
+      if (affiliateError) {
+        console.error('❌ [getProducts] Error fetching affiliate:', affiliateError);
         return errorResponse(res, 'Affiliate not found', 404);
       }
 
+      if (!affiliate) {
+        console.warn('⚠️ [getProducts] Affiliate not found for user:', req.user?.id);
+        return errorResponse(res, 'Affiliate not found', 404);
+      }
+
+      console.log('✅ [getProducts] Affiliate found with tier:', affiliate.tier);
+      console.log('📥 [getProducts] Querying products table with in_stock=true');
+
       const { data: products, error } = await supabaseAdmin
         .from('products')
-        .select('id, name, price, description, category_id, image')
+        .select('id, name, slug, description, thumbnail, images, price, discount_price, in_stock, stock_quantity, category_id, brand_id')
         .eq('in_stock', true)
+        .gt('stock_quantity', 0)
         .limit(100);
 
-      if (error || !products) {
-        return errorResponse(res, 'Failed to fetch products', 500);
+      if (error) {
+        console.error('❌ [getProducts] Supabase error:', error.message, error.details);
+        return errorResponse(res, `Failed to fetch products: ${error.message}`, 500);
+      }
+
+      console.log('✅ [getProducts] Found', products?.length || 0, 'products');
+
+      if (!products || products.length === 0) {
+        console.log('ℹ️ [getProducts] No products in stock');
+        return successResponse(res, [], 'No products currently available');
       }
 
       const commissionRates: Record<string, number> = {
@@ -692,16 +830,59 @@ export class AffiliateController {
       };
 
       const rate = commissionRates[affiliate.tier] || 0.08;
+      console.log('💰 [getProducts] Using commission rate:', rate * 100, '%');
 
-      const productsWithCommission = products.map(product => ({
-        ...product,
-        commissionRate: rate * 100,
-        commission: parseFloat((product.price * rate).toFixed(2)),
-      }));
+      const productsWithCommission = products.map(product => {
+        // Use discount_price if available, fall back to price, default to 0
+        const price = product.discount_price || product.price || 0;
+        
+        if (!price || price === 0) {
+          console.warn('⚠️ [getProducts] Product', product.id, 'has no valid price (discount:', product.discount_price, 'price:', product.price, ')');
+          return {
+            id: product.id,
+            name: product.name,
+            slug: product.slug,
+            description: product.description,
+            thumbnail: product.thumbnail,
+            images: product.images,
+            price: product.price || 0,
+            originalPrice: product.price || 0,
+            discountPrice: product.discount_price || 0,
+            commissionRate: rate * 100,
+            commission: 0,
+            inStock: product.in_stock,
+            stockQuantity: product.stock_quantity,
+            categoryId: product.category_id,
+            brandId: product.brand_id,
+          };
+        }
+        
+        return {
+          id: product.id,
+          name: product.name,
+          slug: product.slug,
+          description: product.description,
+          thumbnail: product.thumbnail,
+          images: product.images,
+          price,
+          originalPrice: product.price || 0,
+          discountPrice: product.discount_price || 0,
+          commissionRate: rate * 100,
+          commission: parseFloat((price * rate).toFixed(2)),
+          inStock: product.in_stock,
+          stockQuantity: product.stock_quantity,
+          categoryId: product.category_id,
+          brandId: product.brand_id,
+        };
+      });
 
+      console.log('✅ [getProducts] Mapped', productsWithCommission.length, 'products with commissions');
       return successResponse(res, productsWithCommission, 'Products with commissions retrieved');
     } catch (error) {
-      console.error('Products error:', error);
+      console.error('❌ [getProducts] Unexpected error:', error instanceof Error ? error.message : error);
+      if (error instanceof Error) {
+        console.error('   Stack:', error.stack);
+      }
       return errorResponse(res, 'Failed to fetch products', 500);
     }
   }
@@ -920,6 +1101,185 @@ export class AffiliateController {
     } catch (error) {
       console.error('Tier info error:', error);
       return errorResponse(res, 'Failed to fetch tier info', 500);
+    }
+  }
+
+  /**
+   * Process pending payouts (admin endpoint)
+   * Initiates Paystack transfers for all pending payout requests
+   */
+  async processPendingPayouts(req: any, res: Response) {
+    try {
+      console.log('🔄 [PAYOUT] Processing pending payouts...');
+
+      // Get all pending payouts with their payment methods
+      const pendingPayouts = await affiliatePayoutProcessor.getPendingPayouts();
+
+      if (pendingPayouts.length === 0) {
+        return successResponse(res, { processed: 0, failed: 0 }, 'No pending payouts to process');
+      }
+
+      let processed = 0;
+      let failed = 0;
+      const results = [];
+
+      for (const payoutRequest of pendingPayouts) {
+        try {
+          const paymentMethod = normalizePaymentMethod(payoutRequest.payout_methods);
+
+          console.log(`🔍 [PAYOUT] Payment method payload for payout ${payoutRequest.id}:`, paymentMethod);
+
+          if (!paymentMethod) {
+            console.error(`❌ [PAYOUT] No valid payment method found for payout ${payoutRequest.id}`);
+            failed++;
+            results.push({
+              payoutId: payoutRequest.id,
+              status: 'failed',
+              error: 'Payment method not found',
+            });
+            continue;
+          }
+
+          const result = await affiliatePayoutProcessor.processPayout(payoutRequest, paymentMethod);
+          processed++;
+          results.push({
+            payoutId: payoutRequest.id,
+            status: 'success',
+            reference: result.reference,
+          });
+        } catch (error: any) {
+          console.error(`❌ [PAYOUT] Failed to process payout ${payoutRequest.id}:`, error.message);
+          failed++;
+          results.push({
+            payoutId: payoutRequest.id,
+            status: 'failed',
+            error: error.message,
+          });
+        }
+      }
+
+      console.log(`✅ [PAYOUT] Batch processing complete: ${processed} processed, ${failed} failed`);
+
+      return successResponse(
+        res,
+        { processed, failed, results },
+        `Payout processing complete: ${processed} processed, ${failed} failed`
+      );
+    } catch (error: any) {
+      console.error('❌ [PAYOUT] Batch processing error:', error.message);
+      return errorResponse(res, 'Failed to process payouts', 500);
+    }
+  }
+
+  /**
+   * Verify payout status with Paystack
+   */
+  async verifyPayoutStatus(req: any, res: Response) {
+    try {
+      const { payoutId } = req.params;
+
+      // Get payout details
+      const { data: payout, error: payoutError } = await supabaseAdmin
+        .from('payout_requests')
+        .select('*')
+        .eq('id', payoutId)
+        .single();
+
+      if (payoutError || !payout) {
+        return errorResponse(res, 'Payout not found', 404);
+      }
+
+      if (!payout.reference) {
+        return errorResponse(res, 'Payout has no Paystack reference yet', 400);
+      }
+
+      // Verify with Paystack
+      const transferStatus = await affiliatePayoutProcessor.verifyTransferStatus(payout.reference);
+
+      // Update payout status if needed
+      if (transferStatus.status && transferStatus.status !== payout.status) {
+        await affiliatePayoutProcessor.updatePayoutFromPaystack(payoutId, transferStatus.status);
+      }
+
+      return successResponse(
+        res,
+        {
+          payoutId,
+          reference: payout.reference,
+          currentStatus: payout.status,
+          paystackStatus: transferStatus.status,
+          amount: payout.amount,
+          reason: transferStatus.reason,
+        },
+        'Payout status verified'
+      );
+    } catch (error: any) {
+      console.error('Verify payout error:', error.message);
+      return errorResponse(res, 'Failed to verify payout status', 500);
+    }
+  }
+
+  /**
+   * Retry a failed payout
+   */
+  async retryFailedPayout(req: any, res: Response) {
+    try {
+      const { payoutId } = req.params;
+
+      // Get payout details
+      const { data: payout, error: payoutError } = await supabaseAdmin
+        .from('payout_requests')
+        .select(
+          `
+          id,
+          affiliate_id,
+          amount,
+          payout_method_id,
+          method,
+          status,
+          payout_methods (
+            id,
+            method_type,
+            account_name,
+            provider,
+            is_default
+          )
+        `
+        )
+        .eq('id', payoutId)
+        .single();
+
+      if (payoutError || !payout) {
+        return errorResponse(res, 'Payout not found', 404);
+      }
+
+      if (payout.status !== 'failed') {
+        return errorResponse(res, `Cannot retry payout with status '${payout.status}'`, 400);
+      }
+
+      const paymentMethod = normalizePaymentMethod(payout.payout_methods);
+
+      if (!paymentMethod) {
+        return errorResponse(res, 'Payment method not found', 404);
+      }
+
+      console.log('🔍 [PAYOUT] Retry payment method:', paymentMethod);
+
+      // Retry the payout
+      const result = await affiliatePayoutProcessor.processPayout(payout, paymentMethod);
+
+      return successResponse(
+        res,
+        {
+          payoutId,
+          reference: result.reference,
+          amount: result.amount,
+        },
+        'Payout retry initiated successfully'
+      );
+    } catch (error: any) {
+      console.error('Retry payout error:', error.message);
+      return errorResponse(res, 'Failed to retry payout', 500);
     }
   }
 }

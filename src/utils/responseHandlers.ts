@@ -6,11 +6,12 @@ export const successResponse = (
   message: string = 'Success',
   statusCode: number = 200
 ) => {
-  return res.status(statusCode).json({
+  const responseObj = {
     success: true,
     message,
     data,
-  });
+  };
+  return res.status(statusCode).json(responseObj);
 };
 
 export const errorResponse = (
@@ -19,11 +20,13 @@ export const errorResponse = (
   statusCode: number = 500,
   errors: any = null
 ) => {
-  return res.status(statusCode).json({
+  const responseObj = {
     success: false,
     message,
     errors,
-  });
+  };
+  console.log('📤 SENDING ERROR RESPONSE:', JSON.stringify(responseObj, null, 2));
+  return res.status(statusCode).json(responseObj);
 };
 
 export const paginatedResponse = (
@@ -37,12 +40,13 @@ export const paginatedResponse = (
   },
   message: string = 'Success'
 ) => {
-  return res.status(200).json({
+  const responseObj = {
     success: true,
     message,
     data,
     pagination,
-  });
+  };
+  return res.status(200).json(responseObj);
 };
 
 

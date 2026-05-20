@@ -1,9 +1,11 @@
 // src/services/affiliate.service.ts
 
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { frontendUrl } from '../config/env';
 import {
   Affiliate,
   ReferralLink,
+  AffiliateLink,
   Earning,
   Payout,
   PaymentMethod,
@@ -86,6 +88,103 @@ export class AffiliateService {
   }
 
   /**
+   * Get affiliate by referral code and active status
+   */
+  async getAffiliateByReferralCode(referralCode: string): Promise<Affiliate | null> {
+    const { data, error } = await supabaseAdmin
+      .from('affiliates')
+      .select('*')
+      .eq('referral_code', referralCode)
+      .eq('status', 'active')
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return this.mapAffiliate(data);
+  }
+
+  /**
+   * Generate a product affiliate link and store it in affiliate_links
+   */
+  async generateProductAffiliateLink(
+    affiliateId: string,
+    productId: string
+  ): Promise<AffiliateLink> {
+    console.log('🔍 generateProductAffiliateLink called with:', { affiliateId, productId });
+    
+    const affiliate = await this.getAffiliateById(affiliateId);
+    if (!affiliate) {
+      console.error('❌ Affiliate not found for ID:', affiliateId);
+      throw new Error('Affiliate not found');
+    }
+
+    console.log('✅ Affiliate found:', affiliate.referralCode);
+
+    const { data: product, error: productError } = await supabaseAdmin
+      .from('products')
+      .select('slug')
+      .eq('id', productId)
+      .single();
+
+    if (productError || !product) {
+      console.error('❌ Product not found for ID:', productId, productError);
+      throw new Error('Product not found');
+    }
+
+    console.log('✅ Product found:', product.slug);
+
+    const productSlug = product.slug || productId;
+    const normalizedFrontendUrl = frontendUrl.replace(/\/$/, '');
+    const generatedUrl = `${normalizedFrontendUrl}/product/${encodeURIComponent(
+      productSlug
+    )}?ref=${encodeURIComponent(affiliate.referralCode)}`;
+
+    console.log('✅ Generated URL:', generatedUrl);
+
+    const { data: existingLink } = await supabaseAdmin
+      .from('affiliate_links')
+      .select('*')
+      .eq('affiliate_id', affiliateId)
+      .eq('product_id', productId)
+      .single();
+
+    if (existingLink) {
+      console.log('✅ Existing link found, returning mapped link');
+      const mapped = this.mapAffiliateLink(existingLink);
+      console.log('✅ Mapped existing link:', mapped);
+      return mapped;
+    }
+
+    console.log('🔄 Inserting new affiliate link into database');
+
+    const { data, error: insertError } = await supabaseAdmin
+      .from('affiliate_links')
+      .insert({
+        affiliate_id: affiliateId,
+        product_id: productId,
+        referral_code: affiliate.referralCode,
+        generated_url: generatedUrl,
+        clicks: 0,
+        conversions: 0,
+      })
+      .select()
+      .single();
+
+    if (insertError || !data) {
+      console.error('❌ Failed to insert affiliate link:', insertError?.message || 'Unknown error');
+      throw new Error(`Failed to create affiliate link: ${insertError?.message || 'Unknown error'}`);
+    }
+
+    console.log('✅ Link inserted successfully:', data);
+    const mapped = this.mapAffiliateLink(data);
+    console.log('✅ Mapped link returned:', mapped);
+
+    return mapped;
+  }
+
+  /**
    * Get dashboard statistics for affiliate
    */
   async getDashboardStats(affiliateId: string): Promise<DashboardStats> {
@@ -100,7 +199,7 @@ export class AffiliateService {
     startOfMonth.setHours(0, 0, 0, 0);
 
     const { data: thisMonthData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .in('status', ['approved', 'paid'])
@@ -114,7 +213,7 @@ export class AffiliateService {
     const endOfLastMonth = new Date(startOfMonth);
 
     const { data: lastMonthData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .in('status', ['approved', 'paid'])
@@ -183,7 +282,7 @@ export class AffiliateService {
 
       // Get earnings for this month
       const { data: earningData } = await supabaseAdmin
-        .from('earnings')
+        .from('affiliate_earnings')
         .select('amount')
         .eq('affiliate_id', affiliateId)
         .in('status', ['approved', 'paid'])
@@ -195,7 +294,7 @@ export class AffiliateService {
 
       // Get clicks for this month
       const { data: clickData } = await supabaseAdmin
-        .from('click_logs')
+        .from('affiliate_clicks')
         .select('id')
         .eq('referral_code', affiliate.referralCode)
         .gte('created_at', monthStart.toISOString())
@@ -205,7 +304,7 @@ export class AffiliateService {
 
       // Get conversions for this month
       const { data: conversionData } = await supabaseAdmin
-        .from('click_logs')
+        .from('affiliate_clicks')
         .select('id')
         .eq('referral_code', affiliate.referralCode)
         .eq('converted', true)
@@ -226,15 +325,6 @@ export class AffiliateService {
   }
 
   /**
-   * DEPRECATED: Placeholder chart data removed
-   * All chart data is now real database data only in production
-   * This method is kept for reference but disabled to prevent accidental use
-   */
-  private generatePlaceholderChartData(): ChartData {
-    throw new Error('Placeholder chart data is disabled in production. Only real database data is returned.');
-  }
-
-  /**
    * Get month labels for the last 12 months
    */
   private getMonthLabels(): string[] {
@@ -252,7 +342,7 @@ export class AffiliateService {
    */
   async getRecentEarnings(affiliateId: string, limit: number = 10): Promise<Earning[]> {
     const { data, error } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('*')
       .eq('affiliate_id', affiliateId)
       .order('created_at', { ascending: false })
@@ -274,7 +364,7 @@ export class AffiliateService {
     page: number = 1,
     limit: number = 20
   ): Promise<{ earnings: Earning[]; total: number; page: number; totalPages: number }> {
-    let query = supabaseAdmin.from('earnings').select('*', { count: 'exact' }).eq('affiliate_id', affiliateId);
+    let query = supabaseAdmin.from('affiliate_earnings').select('*', { count: 'exact' }).eq('affiliate_id', affiliateId);
 
     if (status && status !== 'all') {
       query = query.eq('status', status);
@@ -300,19 +390,19 @@ export class AffiliateService {
    */
   async getEarningsSummary(affiliateId: string): Promise<{ approved: number; pending: number; paid: number }> {
     const { data: approvedData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .eq('status', 'approved');
 
     const { data: pendingData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .eq('status', 'pending');
 
     const { data: paidData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .eq('status', 'paid');
@@ -343,13 +433,14 @@ export class AffiliateService {
     const commissionAmount = parseFloat((orderAmount * rate).toFixed(2));
 
     const { data, error } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .insert({
         affiliate_id: affiliateId,
         order_id: orderId,
         product_id: productId,
         product_name: productName,
         amount: commissionAmount,
+        commission_rate: rate,
         status: 'pending',
       })
       .select()
@@ -393,7 +484,7 @@ export class AffiliateService {
       const monthEnd = new Date(targetYear, i, 0);
 
       const { data: earningsData } = await supabaseAdmin
-        .from('earnings')
+        .from('affiliate_earnings')
         .select('amount')
         .eq('affiliate_id', affiliateId)
         .in('status', ['approved', 'paid'])
@@ -431,7 +522,7 @@ export class AffiliateService {
       const rate = this.COMMISSION_RATES[tier as keyof CommissionRates] * 100;
 
       const { data: earnings, count } = await supabaseAdmin
-        .from('earnings')
+        .from('affiliate_earnings')
         .select('amount', { count: 'exact' })
         .eq('affiliate_id', affiliateId)
         .in('status', ['approved', 'paid']);
@@ -463,7 +554,7 @@ export class AffiliateService {
       endDate?: string;
     }
   ): Promise<string> {
-    let query = supabaseAdmin.from('earnings').select('*').eq('affiliate_id', affiliateId);
+    let query = supabaseAdmin.from('affiliate_earnings').select('*').eq('affiliate_id', affiliateId);
 
     if (filters?.status && filters.status !== 'all') {
       query = query.eq('status', filters.status);
@@ -529,25 +620,22 @@ export class AffiliateService {
       return [];
     }
 
-    // Enhance each link with real-time stats from click_logs
+    // Enhance each link with real-time stats from affiliate_clicks
     const enrichedLinks = await Promise.all(
       links.map(async (link) => {
-        // Get click count for this referral code
         const { count: clickCount } = await supabaseAdmin
-          .from('click_logs')
+          .from('affiliate_clicks')
           .select('id', { count: 'exact' })
           .eq('referral_code', link.referral_code);
 
-        // Get conversion count for this referral code
         const { count: conversionCount } = await supabaseAdmin
-          .from('click_logs')
+          .from('affiliate_clicks')
           .select('id', { count: 'exact' })
           .eq('referral_code', link.referral_code)
           .eq('converted', true);
 
-        // Get earnings for this affiliate
         const { data: earningsData } = await supabaseAdmin
-          .from('earnings')
+          .from('affiliate_earnings')
           .select('amount')
           .eq('affiliate_id', affiliateId)
           .in('status', ['approved', 'paid']);
@@ -567,6 +655,23 @@ export class AffiliateService {
   }
 
   /**
+   * Get product affiliate links for an affiliate
+   */
+  async getAffiliateLinks(affiliateId: string): Promise<AffiliateLink[]> {
+    const { data: links, error } = await supabaseAdmin
+      .from('affiliate_links')
+      .select('*')
+      .eq('affiliate_id', affiliateId)
+      .order('created_at', { ascending: false });
+
+    if (error || !links) {
+      return [];
+    }
+
+    return links.map(link => this.mapAffiliateLink(link));
+  }
+
+  /**
    * Create referral link
    */
   async createReferralLink(
@@ -579,7 +684,7 @@ export class AffiliateService {
       throw new Error('Affiliate not found');
     }
 
-    const baseUrl = process.env.FRONTEND_URL || 'https://ventechgadgets.com';
+    const baseUrl = frontendUrl;
     const url = `${baseUrl}?ref=${affiliate.referralCode}${source ? `&utm_source=${source}` : ''}`;
     // For now, use the URL as short URL (can integrate with short URL service later)
     const shortUrl = `${baseUrl}?ref=${affiliate.referralCode}`;
@@ -634,34 +739,50 @@ export class AffiliateService {
     earnings: number;
     conversionRate: string;
   }> {
-    // Verify link exists and belongs to affiliate
-    const { data: link } = await supabaseAdmin
+    let referralCode: string | null = null;
+
+    // Try referral_links first
+    const { data: referralLink } = await supabaseAdmin
       .from('referral_links')
       .select('referral_code')
       .eq('id', linkId)
       .eq('affiliate_id', affiliateId)
       .single();
 
-    if (!link) {
+    if (referralLink && referralLink.referral_code) {
+      referralCode = referralLink.referral_code;
+    }
+
+    if (!referralCode) {
+      const { data: productLink } = await supabaseAdmin
+        .from('affiliate_links')
+        .select('referral_code')
+        .eq('id', linkId)
+        .eq('affiliate_id', affiliateId)
+        .single();
+
+      if (productLink && productLink.referral_code) {
+        referralCode = productLink.referral_code;
+      }
+    }
+
+    if (!referralCode) {
       throw new Error('Referral link not found');
     }
 
-    // Get click count for this referral code
     const { count: clickCount } = await supabaseAdmin
-      .from('click_logs')
+      .from('affiliate_clicks')
       .select('id', { count: 'exact' })
-      .eq('referral_code', link.referral_code);
+      .eq('referral_code', referralCode);
 
-    // Get conversion count for this referral code
     const { count: conversionCount } = await supabaseAdmin
-      .from('click_logs')
+      .from('affiliate_clicks')
       .select('id', { count: 'exact' })
-      .eq('referral_code', link.referral_code)
+      .eq('referral_code', referralCode)
       .eq('converted', true);
 
-    // Get earnings for this affiliate
     const { data: earningsData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .in('status', ['approved', 'paid']);
@@ -735,7 +856,7 @@ export class AffiliateService {
    */
   async getPaymentMethods(affiliateId: string): Promise<PaymentMethod[]> {
     const { data, error } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .select('*')
       .eq('affiliate_id', affiliateId);
 
@@ -760,12 +881,12 @@ export class AffiliateService {
     const isDefault = existing.length === 0;
 
     const { data, error } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .insert({
         affiliate_id: affiliateId,
-        type,
-        name,
-        details,
+        method_type: type,
+        account_name: name,
+        provider: details,
         is_default: isDefault,
         is_verified: false,
       })
@@ -785,7 +906,7 @@ export class AffiliateService {
   async deletePaymentMethod(affiliateId: string, methodId: string): Promise<void> {
     // Check if this is the default method
     const { data: method } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .select('is_default')
       .eq('id', methodId)
       .eq('affiliate_id', affiliateId)
@@ -797,7 +918,7 @@ export class AffiliateService {
 
     // Delete the method
     const { error } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .delete()
       .eq('id', methodId)
       .eq('affiliate_id', affiliateId);
@@ -809,7 +930,7 @@ export class AffiliateService {
     // If this was the default, set another as default
     if (method.is_default) {
       const { data: nextMethod } = await supabaseAdmin
-        .from('payment_methods')
+        .from('payout_methods')
         .select('id')
         .eq('affiliate_id', affiliateId)
         .limit(1)
@@ -817,7 +938,7 @@ export class AffiliateService {
 
       if (nextMethod) {
         await supabaseAdmin
-          .from('payment_methods')
+          .from('payout_methods')
           .update({ is_default: true })
           .eq('id', nextMethod.id);
       }
@@ -829,7 +950,7 @@ export class AffiliateService {
    */
   async getPayouts(affiliateId: string): Promise<Payout[]> {
     const { data, error } = await supabaseAdmin
-      .from('payouts')
+      .from('payout_requests')
       .select('*')
       .eq('affiliate_id', affiliateId)
       .order('created_at', { ascending: false });
@@ -861,7 +982,7 @@ export class AffiliateService {
     }
 
     const { data: method } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .select('*')
       .eq('id', methodId)
       .eq('affiliate_id', affiliateId)
@@ -878,11 +999,12 @@ export class AffiliateService {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('payouts')
+      .from('payout_requests')
       .insert({
         affiliate_id: affiliateId,
         amount,
-        method: method.type,
+        payout_method_id: methodId,
+        method: method.method_type,
         status: 'pending',
       })
       .select()
@@ -909,7 +1031,7 @@ export class AffiliateService {
   }> {
     // Count and sum payouts by status
     const { data: allPayouts } = await supabaseAdmin
-      .from('payouts')
+      .from('payout_requests')
       .select('amount, status')
       .eq('affiliate_id', affiliateId);
 
@@ -950,7 +1072,7 @@ export class AffiliateService {
   async cancelPayout(affiliateId: string, payoutId: string): Promise<Payout> {
     // Verify payout exists and belongs to affiliate
     const { data: payout } = await supabaseAdmin
-      .from('payouts')
+      .from('payout_requests')
       .select('*')
       .eq('id', payoutId)
       .eq('affiliate_id', affiliateId)
@@ -967,7 +1089,7 @@ export class AffiliateService {
 
     // Update status to cancelled
     const { data: updated, error } = await supabaseAdmin
-      .from('payouts')
+      .from('payout_requests')
       .update({ status: 'cancelled' })
       .eq('id', payoutId)
       .select()
@@ -986,7 +1108,7 @@ export class AffiliateService {
   async setDefaultPaymentMethod(affiliateId: string, methodId: string): Promise<PaymentMethod> {
     // Verify payment method exists and belongs to affiliate
     const { data: method } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .select('*')
       .eq('id', methodId)
       .eq('affiliate_id', affiliateId)
@@ -998,13 +1120,13 @@ export class AffiliateService {
 
     // Update all methods to is_default=false for this affiliate
     await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .update({ is_default: false })
       .eq('affiliate_id', affiliateId);
 
     // Set this method as default
     const { data: updated, error } = await supabaseAdmin
-      .from('payment_methods')
+      .from('payout_methods')
       .update({ is_default: true })
       .eq('id', methodId)
       .select()
@@ -1020,30 +1142,70 @@ export class AffiliateService {
   /**
    * Track affiliate click
    */
-  async trackClick(referralCode: string, ip: string, userAgent: string, source?: string): Promise<void> {
-    const { error } = await supabaseAdmin.from('click_logs').insert({
+  async trackClick(
+    referralCode: string,
+    ip: string,
+    userAgent: string,
+    source?: string,
+    landingPage?: string
+  ): Promise<void> {
+    const affiliate = await this.getAffiliateByReferralCode(referralCode);
+    if (!affiliate) {
+      console.log(`[AFFILIATE] Invalid referral code: ${referralCode}`);
+      return;
+    }
+
+    // Prevent duplicate clicks from same IP within 5 minutes
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const { data: recentClicks } = await supabaseAdmin
+      .from('affiliate_clicks')
+      .select('id')
+      .eq('referral_code', referralCode)
+      .eq('ip_address', ip)
+      .gte('created_at', fiveMinutesAgo.toISOString())
+      .limit(1);
+
+    if (recentClicks && recentClicks.length > 0) {
+      console.log(`[AFFILIATE] Duplicate click prevented for ${referralCode} from IP: ${ip}`);
+      return;
+    }
+
+    const { data: link } = await supabaseAdmin
+      .from('affiliate_links')
+      .select('id')
+      .eq('referral_code', referralCode)
+      .single();
+
+    const { error } = await supabaseAdmin.from('affiliate_clicks').insert({
+      affiliate_id: affiliate.id,
       referral_code: referralCode,
-      ip,
+      link_id: link?.id || null,
+      ip_address: ip,
       user_agent: userAgent,
+      landing_page: landingPage,
       source: source || 'direct',
       converted: false,
     });
 
     if (error) {
-      console.error('Failed to log click:', error);
+      console.error(`[AFFILIATE] Failed to log click for ${referralCode}:`, error);
+      return;
     }
 
-    // Update affiliate click count
-    const affiliate = await supabaseAdmin
-      .from('affiliates')
-      .select('id')
-      .eq('referral_code', referralCode)
-      .single();
+    console.log(`[AFFILIATE] Click stored for ${referralCode} from IP: ${ip}`);
 
-    if (!affiliate.error && affiliate.data) {
-      await supabaseAdmin.rpc('increment_total_clicks', {
-        affiliate_id: affiliate.data.id,
-      });
+    // Increment total clicks for affiliate
+    await supabaseAdmin.rpc('increment_total_clicks', {
+      affiliate_id: affiliate.id,
+    });
+
+    // Increment clicks for all affiliate links with this referral code
+    const { error: linkError } = await supabaseAdmin.rpc('increment_affiliate_link_clicks_all', {
+      referral_code_param: referralCode,
+    });
+
+    if (linkError) {
+      console.error(`[AFFILIATE] Failed to increment link clicks for ${referralCode}:`, linkError);
     }
   }
 
@@ -1058,6 +1220,8 @@ export class AffiliateService {
   ): Promise<void> {
     if (!affiliateRef) return;
 
+    console.log(`[AFFILIATE] Attributing order ${orderId} to referral: ${affiliateRef}`);
+
     try {
       const { data: affiliate } = await supabaseAdmin
         .from('affiliates')
@@ -1066,7 +1230,10 @@ export class AffiliateService {
         .eq('status', 'active')
         .single();
 
-      if (!affiliate) return;
+      if (!affiliate) {
+        console.log(`[AFFILIATE] No active affiliate found for referral: ${affiliateRef}`);
+        return;
+      }
 
       // Get first product from order (or you can iterate through items)
       const { data: orderItems } = await supabaseAdmin
@@ -1075,16 +1242,21 @@ export class AffiliateService {
         .eq('order_id', orderId)
         .limit(1);
 
-      if (!orderItems || orderItems.length === 0) return;
+      if (!orderItems || orderItems.length === 0) {
+        console.log(`[AFFILIATE] No order items found for order: ${orderId}`);
+        return;
+      }
 
       const productId = orderItems[0].product_id;
       const productName = orderItems[0].products?.[0]?.name || 'Product';
+
+      console.log(`[AFFILIATE] Creating earning for affiliate ${affiliate.id}, order ${orderId}, amount: ${orderAmount}`);
 
       await this.createEarning(affiliate.id, orderId, productId, productName, orderAmount);
 
       // Mark click as converted
       const { data: latestClick } = await supabaseAdmin
-        .from('click_logs')
+        .from('affiliate_clicks')
         .select('id')
         .eq('referral_code', affiliateRef)
         .order('created_at', { ascending: false })
@@ -1092,15 +1264,28 @@ export class AffiliateService {
         .single();
 
       if (latestClick) {
-        await supabaseAdmin.from('click_logs').update({ converted: true }).eq('id', latestClick.id);
+        await supabaseAdmin.from('affiliate_clicks').update({ converted: true }).eq('id', latestClick.id);
+        console.log(`[AFFILIATE] Marked click ${latestClick.id} as converted`);
       }
 
       // Increment total conversions
       await supabaseAdmin.rpc('increment_total_conversions', {
         affiliate_id: affiliate.id,
       });
+
+      // Increment conversions for all affiliate links with this referral code
+      const { error: linkError } = await supabaseAdmin.rpc('increment_affiliate_link_conversions_all', {
+        referral_code_param: affiliateRef,
+      });
+
+      if (linkError) {
+        console.error(`[AFFILIATE] Failed to increment link conversions for ${affiliateRef}:`, linkError);
+      } else {
+        console.log(`[AFFILIATE] Commission generated for order ${orderId}`);
+      }
+
     } catch (error) {
-      console.error('Affiliate attribution error:', error);
+      console.error('[AFFILIATE] Affiliate attribution error:', error);
     }
   }
 
@@ -1156,13 +1341,27 @@ export class AffiliateService {
     };
   }
 
+  private mapAffiliateLink(data: any): AffiliateLink {
+    return {
+      id: data.id,
+      affiliateId: data.affiliate_id,
+      productId: data.product_id,
+      referralCode: data.referral_code,
+      generatedUrl: data.generated_url,
+      clicks: data.clicks,
+      conversions: data.conversions,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+  }
+
   private mapPaymentMethod(data: any): PaymentMethod {
     return {
       id: data.id,
       affiliateId: data.affiliate_id,
-      type: data.type,
-      name: data.name,
-      details: data.details,
+      type: data.method_type || data.type,
+      name: data.account_name || data.name,
+      details: data.provider || data.details || '',
       isDefault: data.is_default,
       isVerified: data.is_verified,
       createdAt: data.created_at,
@@ -1250,14 +1449,14 @@ export class AffiliateService {
   async getCampaignStats(affiliateId: string, campaignId: string): Promise<any> {
     // Get clicks from campaign
     const { count: clicks } = await supabaseAdmin
-      .from('click_logs')
+      .from('affiliate_clicks')
       .select('id', { count: 'exact' })
       .eq('affiliate_id', affiliateId)
       .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
 
     // Get conversions from campaign
     const { count: conversions } = await supabaseAdmin
-      .from('click_logs')
+      .from('affiliate_clicks')
       .select('id', { count: 'exact' })
       .eq('affiliate_id', affiliateId)
       .eq('converted', true)
@@ -1265,7 +1464,7 @@ export class AffiliateService {
 
     // Get earnings from campaign
     const { data: earningsData } = await supabaseAdmin
-      .from('earnings')
+      .from('affiliate_earnings')
       .select('amount')
       .eq('affiliate_id', affiliateId)
       .in('status', ['approved', 'paid'])
@@ -1273,12 +1472,22 @@ export class AffiliateService {
 
     const earnings = earningsData?.reduce((sum, e) => sum + (e.amount || 0), 0) || 0;
 
+    const { data: campaign, error: campaignError } = await supabaseAdmin
+      .from('campaigns')
+      .select('products')
+      .eq('id', campaignId)
+      .single();
+
+    if (campaignError || !campaign) {
+      throw new Error('Campaign not found');
+    }
+
     return {
       campaignId,
       clicks: clicks || 0,
       conversions: conversions || 0,
       earnings: parseFloat(earnings.toFixed(2)),
-      products: [],
+      products: campaign.products || [],
     };
   }
 

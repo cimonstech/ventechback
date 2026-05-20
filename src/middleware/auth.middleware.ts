@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse } from '../utils/responseHandlers';
 import jwt from 'jsonwebtoken';
+import { jwtSecret } from '../config/env';
 
 export interface AuthRequest extends Request {
   user?: any;
@@ -24,10 +25,7 @@ export const authenticate = async (
     // 🔐 Verify JWT using Supabase JWT secret
     let decoded: any;
     try {
-      decoded = jwt.verify(
-        token,
-        process.env.SUPABASE_JWT_SECRET as string
-      );
+      decoded = jwt.verify(token, jwtSecret);
     } catch (err) {
       return errorResponse(res, 'Unauthorized - Invalid token', 401);
     }
@@ -90,7 +88,7 @@ export const requireAffiliate = async (
       .single();
 
     if (error || !affiliate) {
-      return errorResponse(res, 'Affiliate account not found', 404);
+      return errorResponse(res, 'Affiliate account not found', 403);
     }
 
     if (affiliate.status !== 'active') {
