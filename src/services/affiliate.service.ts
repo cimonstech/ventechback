@@ -872,7 +872,7 @@ export class AffiliateService {
    */
   async addPaymentMethod(
     affiliateId: string,
-    type: 'bank' | 'momo' | 'crypto',
+    type: 'bank' | 'momo' | 'crypto' | 'paypal',
     name: string,
     details: string
   ): Promise<PaymentMethod> {

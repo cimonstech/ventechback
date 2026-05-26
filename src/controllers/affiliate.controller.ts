@@ -594,7 +594,7 @@ export class AffiliateController {
         return errorResponse(res, 'Type, name, and details are required', 400);
       }
 
-      if (!['bank', 'momo', 'crypto'].includes(type)) {
+      if (!['bank', 'momo', 'crypto', 'paypal'].includes(type)) {
         return errorResponse(res, 'Invalid payment method type', 400);
       }
 
@@ -1181,7 +1181,7 @@ export class AffiliateController {
       // Get payout details
       const { data: payout, error: payoutError } = await supabaseAdmin
         .from('payout_requests')
-        .select('*')
+        .select(`*, payout_methods ( method_type )`)
         .eq('id', payoutId)
         .single();
 
@@ -1190,13 +1190,14 @@ export class AffiliateController {
       }
 
       if (!payout.reference) {
-        return errorResponse(res, 'Payout has no Paystack reference yet', 400);
+        return errorResponse(res, 'Payout has no payout reference yet', 400);
       }
 
-      // Verify with Paystack
-      const transferStatus = await affiliatePayoutProcessor.verifyTransferStatus(payout.reference);
+      const transferStatus = await affiliatePayoutProcessor.verifyTransferStatus(
+        payout.reference,
+        payout.payout_methods?.method_type
+      );
 
-      // Update payout status if needed
       if (transferStatus.status && transferStatus.status !== payout.status) {
         await affiliatePayoutProcessor.updatePayoutFromPaystack(payoutId, transferStatus.status);
       }
@@ -1207,9 +1208,9 @@ export class AffiliateController {
           payoutId,
           reference: payout.reference,
           currentStatus: payout.status,
-          paystackStatus: transferStatus.status,
+          providerStatus: transferStatus.status,
           amount: payout.amount,
-          reason: transferStatus.reason,
+          reason: transferStatus.reason || transferStatus.batch_header?.sender_batch_id,
         },
         'Payout status verified'
       );

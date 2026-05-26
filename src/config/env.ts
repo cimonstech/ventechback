@@ -50,3 +50,8 @@ export const frontendUrl = frontendUrlValue || 'https://ventechgadgets.com';
 export const frontendUrls = frontendUrlValue
   ? frontendUrlValue.split(',').map(url => url.trim()).filter(Boolean)
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+export const paypalClientId = getOptionalEnv('PAYPAL_CLIENT_ID');
+export const paypalClientSecret = getOptionalEnv('PAYPAL_CLIENT_SECRET');
+export const paypalApiBase = getOptionalEnv('PAYPAL_API_BASE') || 'https://api-m.paypal.com';
+export const paypalPayoutCurrency = getOptionalEnv('PAYPAL_PAYOUT_CURRENCY') || 'USD';

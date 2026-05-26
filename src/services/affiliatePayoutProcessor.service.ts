@@ -5,11 +5,12 @@ import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
 
 interface PayoutRecipient {
-  type: 'nuban' | 'mobile_money' | 'crypto';
+  type: 'nuban' | 'mobile_money' | 'crypto' | 'paypal';
   account_number?: string;
   bank_code?: string;
   mobile_number?: string;
   crypto_address?: string;
+  email?: string;
 }
 
 interface PayoutRequest {
@@ -23,7 +24,7 @@ interface PayoutRequest {
 
 interface PaymentMethod {
   id: string;
-  method_type: 'bank' | 'momo' | 'crypto';
+  method_type: 'bank' | 'momo' | 'crypto' | 'paypal';
   account_name: string;
   provider: string;
   is_default: boolean;
@@ -32,14 +33,28 @@ interface PaymentMethod {
 export class AffiliatePayoutProcessor {
   private paystackSecretKey: string;
   private paystackBaseUrl = 'https://api.paystack.co';
+  private paypalClientId: string;
+  private paypalClientSecret: string;
+  private paypalBaseUrl: string;
+  private paypalPayoutCurrency: string;
   private enabled: boolean;
+  private paypalEnabled: boolean;
 
   constructor() {
     this.paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
+    this.paypalClientId = process.env.PAYPAL_CLIENT_ID || '';
+    this.paypalClientSecret = process.env.PAYPAL_CLIENT_SECRET || '';
+    this.paypalBaseUrl = process.env.PAYPAL_API_BASE || 'https://api-m.paypal.com';
+    this.paypalPayoutCurrency = process.env.PAYPAL_PAYOUT_CURRENCY || 'USD';
     this.enabled = Boolean(this.paystackSecretKey);
+    this.paypalEnabled = Boolean(this.paypalClientId && this.paypalClientSecret);
 
     if (!this.enabled) {
       console.warn('⚠️ [PAYOUT] Paystack payout processing disabled because PAYSTACK_SECRET_KEY is not configured');
+    }
+
+    if (!this.paypalEnabled) {
+      console.warn('⚠️ [PAYOUT] PayPal payout processing disabled because PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET are not configured');
     }
   }
 
@@ -49,9 +64,15 @@ export class AffiliatePayoutProcessor {
     }
   }
 
+  private ensurePayPalConfigured(): void {
+    if (!this.paypalEnabled) {
+      throw new Error('PayPal payout processing is disabled because PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET is not configured');
+    }
+  }
+
   /**
    * Process a pending payout request
-   * Initiates Paystack transfer to the affiliate's payment method
+   * Initiates Paystack transfer or PayPal payout for the affiliate's payment method
    */
   async processPayout(payoutRequest: PayoutRequest, paymentMethod: PaymentMethod): Promise<any> {
     try {
@@ -78,6 +99,42 @@ export class AffiliatePayoutProcessor {
 
       // Parse payment method details
       const paymentDetails = this.parsePaymentDetails(paymentMethod);
+
+      if (paymentDetails.type === 'paypal') {
+        this.ensurePayPalConfigured();
+
+        const reference = `PAYPAL_${payoutRequest.id.substring(0, 8)}_${Date.now()}`;
+        const payoutResponse = await this.initiatePayPalPayout({
+          recipientEmail: paymentDetails.email!,
+          amount: payoutRequest.amount,
+          currency: this.paypalPayoutCurrency,
+          reference,
+          note: `Affiliate commission payout for ${affiliate.referral_code}`,
+        });
+
+        const payoutReference = payoutResponse.batch_header?.payout_batch_id || reference;
+        console.log(`✅ [PAYOUT] PayPal payout initiated: ${payoutReference}`);
+
+        const { error: updateError } = await supabaseAdmin
+          .from('payout_requests')
+          .update({
+            status: 'processing',
+            reference: payoutReference,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', payoutRequest.id);
+
+        if (updateError) {
+          console.error(`❌ [PAYOUT] Failed to update payout status: ${updateError.message}`);
+        }
+
+        return {
+          success: true,
+          reference: payoutReference,
+          amount: payoutRequest.amount,
+          message: 'PayPal payout initiated successfully',
+        };
+      }
 
       // Create Paystack transfer recipient
       const recipientCode = await this.createOrGetRecipient(paymentMethod, paymentDetails);
@@ -160,6 +217,12 @@ export class AffiliatePayoutProcessor {
       return {
         type: 'crypto',
         crypto_address: details,
+      };
+    } else if (paymentMethod.method_type === 'paypal') {
+      // Format: "PAYPAL_EMAIL"
+      return {
+        type: 'paypal',
+        email: details,
       };
     }
 
@@ -297,7 +360,11 @@ export class AffiliatePayoutProcessor {
   /**
    * Verify Paystack transfer status
    */
-  async verifyTransferStatus(reference: string): Promise<any> {
+  async verifyTransferStatus(reference: string, methodType?: string): Promise<any> {
+    if (methodType === 'paypal' || reference.startsWith('PAYPAL_')) {
+      return this.verifyPayPalPayoutStatus(reference);
+    }
+
     this.ensurePaystackConfigured();
     try {
       const response = await axios.get(`${this.paystackBaseUrl}/transfer/verify/${reference}`, {
@@ -324,6 +391,12 @@ export class AffiliatePayoutProcessor {
       failed: 'failed',
       pending: 'processing',
       cancelled: 'cancelled',
+      SUCCESS: 'completed',
+      DENIED: 'failed',
+      FAILED: 'failed',
+      PENDING: 'processing',
+      PROCESSING: 'processing',
+      UNCLAIMED: 'failed',
     };
 
     const newStatus = statusMap[paystackStatus] || 'processing';
@@ -341,6 +414,107 @@ export class AffiliatePayoutProcessor {
     }
 
     console.log(`✅ [PAYOUT] Updated payout ${payoutId} to status: ${newStatus}`);
+  }
+
+  private async getPayPalAccessToken(): Promise<string> {
+    this.ensurePayPalConfigured();
+
+    const response = await axios.post(
+      `${this.paypalBaseUrl}/v1/oauth2/token`,
+      'grant_type=client_credentials',
+      {
+        auth: {
+          username: this.paypalClientId,
+          password: this.paypalClientSecret,
+        },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }
+    );
+
+    if (!response.data?.access_token) {
+      throw new Error('Failed to retrieve PayPal access token');
+    }
+
+    return response.data.access_token;
+  }
+
+  private async initiatePayPalPayout(data: {
+    recipientEmail: string;
+    amount: number;
+    currency: string;
+    reference: string;
+    note: string;
+  }): Promise<any> {
+    const accessToken = await this.getPayPalAccessToken();
+    try {
+      const response = await axios.post(
+        `${this.paypalBaseUrl}/v1/payments/payouts`,
+        {
+          sender_batch_header: {
+            sender_batch_id: data.reference,
+            email_subject: 'Your affiliate payout is being sent',
+            email_message: 'A payout was requested from your affiliate account.',
+          },
+          items: [
+            {
+              recipient_type: 'EMAIL',
+              amount: {
+                value: data.amount.toFixed(2),
+                currency: data.currency,
+              },
+              receiver: data.recipientEmail,
+              note: data.note,
+              sender_item_id: data.reference,
+            },
+          ],
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (!response.data || !response.data.batch_header) {
+        throw new Error('PayPal payout response was invalid');
+      }
+
+      return response.data;
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message;
+      console.error(`❌ [PAYPAL] Payout error: ${errorMessage}`);
+      throw new Error(`PayPal payout failed: ${errorMessage}`);
+    }
+  }
+
+  private async verifyPayPalPayoutStatus(reference: string): Promise<any> {
+    this.ensurePayPalConfigured();
+
+    try {
+      const accessToken = await this.getPayPalAccessToken();
+      const response = await axios.get(`${this.paypalBaseUrl}/v1/payments/payouts/${reference}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const status = response.data?.batch_header?.batch_status || 'PENDING';
+      console.log(`📋 [PAYPAL] Payout status for ${reference}:`, status);
+
+      return {
+        status,
+        batch_header: response.data.batch_header,
+        items: response.data.items,
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message;
+      console.error(`❌ [PAYPAL] Verify payout error: ${errorMessage}`);
+      throw new Error(`PayPal payout verification failed: ${errorMessage}`);
+    }
   }
 }
 

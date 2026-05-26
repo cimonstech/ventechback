@@ -1,12 +1,122 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { paypalApiBase, paypalClientId, paypalClientSecret } from '../config/env';
 
 export class PaymentController {
-  // Initialize Paystack transaction (from backend as per Paystack best practices)
+  private getPayPalAccessToken = async (): Promise<string> => {
+    if (!paypalClientId || !paypalClientSecret) {
+      throw new Error('PayPal client ID and secret are not configured');
+    }
+
+    const response = await axios.post(
+      `${paypalApiBase}/v1/oauth2/token`,
+      'grant_type=client_credentials',
+      {
+        auth: {
+          username: paypalClientId,
+          password: paypalClientSecret,
+        },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }
+    );
+
+    if (!response.data?.access_token) {
+      throw new Error('Failed to obtain PayPal access token');
+    }
+
+    return response.data.access_token;
+  };
+
+  private createPayPalOrder = async (options: {
+    email: string;
+    amount: number;
+    currency: string;
+    reference: string;
+    returnUrl: string;
+    cancelUrl: string;
+    metadata?: any;
+  }) => {
+    const accessToken = await this.getPayPalAccessToken();
+
+    const payload: any = {
+      intent: 'CAPTURE',
+      application_context: {
+        brand_name: 'VENTECH GADGETS',
+        landing_page: 'LOGIN',
+        user_action: 'PAY_NOW',
+        return_url: options.returnUrl,
+        cancel_url: options.cancelUrl,
+      },
+      purchase_units: [
+        {
+          reference_id: options.reference,
+          invoice_id: options.reference,
+          custom_id: options.reference,
+          description: 'VENTECH checkout payment',
+          amount: {
+            currency_code: options.currency,
+            value: options.amount.toFixed(2),
+          },
+        },
+      ],
+    };
+
+    const response = await axios.post(`${paypalApiBase}/v2/checkout/orders`, payload, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.data || !response.data.id) {
+      throw new Error('PayPal order creation failed');
+    }
+
+    const approvalLink = response.data.links?.find((link: any) => link.rel === 'approve')?.href;
+
+    return {
+      orderId: response.data.id,
+      status: response.data.status,
+      approvalUrl: approvalLink,
+      data: response.data,
+    };
+  };
+
+  private capturePayPalOrder = async (orderId: string) => {
+    const accessToken = await this.getPayPalAccessToken();
+    const response = await axios.post(
+      `${paypalApiBase}/v2/checkout/orders/${orderId}/capture`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.data || !response.data.status) {
+      throw new Error('PayPal capture response was invalid');
+    }
+
+    return response.data;
+  };
+
+  // Initialize Paystack or PayPal transaction
   async initializeTransaction(req: Request, res: Response) {
     try {
-      const { email, amount, reference, callback_url, metadata } = req.body;
+      const {
+        provider = 'paystack',
+        email,
+        amount,
+        reference,
+        callback_url,
+        metadata,
+        currency = 'GHS',
+      } = req.body;
 
       // Validate required fields
       if (!email || !amount || !reference) {
@@ -25,6 +135,40 @@ export class PaymentController {
         });
       }
 
+      const preferredProvider = String(provider).toLowerCase();
+      const amountNumber = Number(amount);
+      if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid amount',
+        });
+      }
+
+      if (preferredProvider === 'paypal') {
+        if (!callback_url) {
+          return res.status(400).json({
+            success: false,
+            message: 'callback_url is required for PayPal checkout',
+          });
+        }
+
+        const paypalOrder = await this.createPayPalOrder({
+          email,
+          amount: amountNumber,
+          currency: String(currency).toUpperCase(),
+          reference,
+          returnUrl: callback_url,
+          cancelUrl: `${callback_url}?cancelled=true`,
+          metadata,
+        });
+
+        return res.json({
+          success: true,
+          data: paypalOrder,
+          message: 'PayPal order created successfully',
+        });
+      }
+
       const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
       if (!paystackSecretKey) {
         return res.status(500).json({
@@ -36,9 +180,10 @@ export class PaymentController {
       // Prepare Paystack initialize transaction payload
       const payload: any = {
         email,
-        amount: Math.round(amount), // Amount in pesewas (GHS * 100)
+        amount: Math.round(amountNumber), // Amount in pesewas (GHS * 100)
         reference,
         currency: 'GHS',
+        channels: ['mobile_money'],
       };
 
       // Add callback URL if provided
@@ -76,7 +221,7 @@ export class PaymentController {
         });
       }
     } catch (error: any) {
-      console.error('Error initializing Paystack transaction:', error);
+      console.error('Error initializing transaction:', error);
       return res.status(500).json({
         success: false,
         message: error.response?.data?.message || 'Failed to initialize transaction',
@@ -85,15 +230,111 @@ export class PaymentController {
     }
   }
 
-  // Verify Paystack transaction
+  // Verify Paystack or PayPal transaction
   async verifyTransaction(req: Request, res: Response) {
     try {
-      const { reference } = req.body;
+      const {
+        provider = 'paystack',
+        reference,
+        order_id,
+        metadata,
+      } = req.body;
 
-      if (!reference) {
+      const preferredProvider = String(provider).toLowerCase();
+      const transactionReference = reference || req.body.orderID || req.body.orderId;
+
+      if (!transactionReference) {
         return res.status(400).json({
           success: false,
           message: 'Transaction reference is required',
+        });
+      }
+
+      if (preferredProvider === 'paypal') {
+        const orderId = String(transactionReference);
+        const capturedOrder = await this.capturePayPalOrder(orderId);
+        const capture = capturedOrder.purchase_units?.[0]?.payments?.captures?.[0];
+
+        if (!capture) {
+          return res.status(400).json({
+            success: false,
+            message: 'PayPal capture data not available',
+          });
+        }
+
+        const amountValue = capture.amount?.value || '0.00';
+        const verifiedAmount = Number(amountValue);
+        const currency = capture.amount?.currency_code || 'USD';
+        const isSuccessful = capture.status === 'COMPLETED';
+
+        const transactionData: any = {
+          transaction_reference: orderId,
+          paystack_reference: capture.id,
+          payment_method: 'paypal',
+          payment_provider: 'paypal',
+          amount: verifiedAmount,
+          currency,
+          status: isSuccessful ? 'success' : 'failed',
+          payment_status: isSuccessful ? 'paid' : 'failed',
+          customer_email: capturedOrder.payer?.email_address || '',
+          customer_code: capturedOrder.payer?.payer_id || null,
+          authorization_code: capture.id || null,
+          channel: 'paypal',
+          metadata: metadata || {},
+          initiated_at: new Date().toISOString(),
+        };
+
+        if (isSuccessful) {
+          transactionData.paid_at = new Date().toISOString();
+        }
+
+        if (metadata?.user_id && metadata.user_id !== 'guest') {
+          transactionData.user_id = metadata.user_id;
+        }
+
+        if (metadata?.order_id) {
+          transactionData.order_id = metadata.order_id;
+        }
+
+        const { error: dbError } = await supabaseAdmin
+          .from('transactions')
+          .upsert(transactionData, {
+            onConflict: 'transaction_reference',
+            ignoreDuplicates: false,
+          });
+
+        if (dbError) {
+          console.error('Error saving PayPal transaction to database:', dbError);
+        }
+
+        const orderIdToUpdate = metadata?.order_id || null;
+        if (isSuccessful && orderIdToUpdate) {
+          const { error: updateOrderError } = await supabaseAdmin
+            .from('orders')
+            .update({
+              payment_status: 'paid',
+              payment_method: 'paypal',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', orderIdToUpdate);
+
+          if (updateOrderError) {
+            console.error('Error updating order payment status:', updateOrderError);
+          }
+        }
+
+        return res.json({
+          success: isSuccessful,
+          data: {
+            orderId,
+            capture_id: capture.id,
+            status: capture.status,
+            amount: verifiedAmount,
+            currency,
+            payer: capturedOrder.payer,
+            metadata: metadata || {},
+          },
+          message: isSuccessful ? 'PayPal transaction captured successfully' : 'PayPal transaction capture failed',
         });
       }
 
@@ -107,7 +348,7 @@ export class PaymentController {
 
       // Verify transaction with Paystack
       const response = await axios.get(
-        `https://api.paystack.co/transaction/verify/${reference}`,
+        `https://api.paystack.co/transaction/verify/${transactionReference}`,
         {
           headers: {
             Authorization: `Bearer ${paystackSecretKey}`,
@@ -125,7 +366,7 @@ export class PaymentController {
         // Save transaction to database for tracking
         try {
           const transactionData: any = {
-            transaction_reference: reference,
+            transaction_reference: transactionReference,
             paystack_reference: transaction.reference,
             payment_method: transaction.metadata?.payment_method || 'paystack',
             payment_provider: 'paystack',

@@ -57,7 +57,7 @@ export interface Payout {
   id: string;
   affiliateId: string;
   amount: number;
-  method: 'bank' | 'momo' | 'crypto';
+  method: 'bank' | 'momo' | 'crypto' | 'paypal';
   status: 'pending' | 'processing' | 'completed';
   reference?: string;
   processedAt?: string;
@@ -68,7 +68,7 @@ export interface Payout {
 export interface PaymentMethod {
   id: string;
   affiliateId: string;
-  type: 'bank' | 'momo' | 'crypto';
+  type: 'bank' | 'momo' | 'crypto' | 'paypal';
   name: string;
   details: string;
   isDefault: boolean;
