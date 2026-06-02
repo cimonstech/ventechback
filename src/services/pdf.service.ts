@@ -147,7 +147,7 @@ class PDFService {
       
       // Check Content-Type header if available
       const contentType = logoResponse.headers['content-type'];
-      if (contentType && contentType.includes('webp')) {
+      if (typeof contentType === 'string' && contentType.includes('webp')) {
         throw new Error(`Content-Type indicates WebP format: ${contentType}. Please ensure the logo file is PNG format.`);
       }
       

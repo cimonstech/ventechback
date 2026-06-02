@@ -1,11 +1,14 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { successResponse } from '../utils/responseHandlers';
 import enhancedEmailService from '../services/enhanced-email.service';
 import pdfService from '../services/pdf.service';
+import { affiliateService } from '../services/affiliate.service';
+import { AuthRequest } from '../middleware/auth.middleware';
 
 export class OrderController {
   // Get all orders (admin)
-  async getAllOrders(req: Request, res: Response) {
+  async getAllOrders(req: AuthRequest, res: Response) {
     try {
       const { user_id } = req.query;
       
@@ -55,7 +58,7 @@ export class OrderController {
   }
 
   // Track order by number/ID and email (public endpoint with email verification)
-  async trackOrder(req: Request, res: Response) {
+  async trackOrder(req: AuthRequest, res: Response) {
     try {
       const { order_number_or_id, email } = req.body;
 
@@ -184,7 +187,7 @@ export class OrderController {
   }
 
   // Get order by ID
-  async getOrderById(req: Request, res: Response) {
+  async getOrderById(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
 
@@ -229,7 +232,7 @@ export class OrderController {
   }
 
   // Update order status
-  async updateOrderStatus(req: Request, res: Response) {
+  async updateOrderStatus(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
       const { status, tracking_number, notes } = req.body;
@@ -403,7 +406,7 @@ export class OrderController {
   }
 
   // Update payment status
-  async updatePaymentStatus(req: Request, res: Response) {
+  async updatePaymentStatus(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
       const { payment_status } = req.body;
@@ -448,7 +451,7 @@ export class OrderController {
   }
 
   // Cancel order (supports both logged-in and anonymous users)
-  async cancelOrder(req: Request, res: Response) {
+  async cancelOrder(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
       const { cancellation_reason, email } = req.body;
@@ -665,7 +668,7 @@ export class OrderController {
   }
 
   // Create order (with email confirmation)
-  async createOrder(req: Request, res: Response) {
+  async createOrder(req: AuthRequest, res: Response) {
     try {
       console.log('📦 Order creation request received:', {
         hasUserId: !!req.body.user_id,
@@ -1386,11 +1389,24 @@ export class OrderController {
         stock_updated: true, // Stock is updated above
       });
 
-      res.json({
-        success: true,
-        message: 'Order created successfully',
-        data: orderData,
-      });
+      const affiliateRef = req.cookies?.affiliate_ref;
+      if (affiliateRef) {
+        console.log(`[AFFILIATE] Order attribution triggered for order ${orderData.id} with referral: ${affiliateRef}`);
+        try {
+          const orderAmount = orderData.subtotal || orderData.total || 0;
+          await affiliateService.attributeEarningsForOrder(
+            orderData.id,
+            req.user?.id || null,
+            affiliateRef,
+            orderAmount
+          );
+        } catch (error) {
+          console.error('[AFFILIATE] Affiliate attribution failed:', error);
+          // Do NOT block order creation
+        }
+      }
+
+      return successResponse(res, orderData, 'Order created successfully', 201);
     } catch (error: any) {
       console.error('❌ Error creating order:', {
         error,
@@ -1412,7 +1428,7 @@ export class OrderController {
   }
 
   // Send wishlist reminder
-  async sendWishlistReminder(req: Request, res: Response) {
+  async sendWishlistReminder(req: AuthRequest, res: Response) {
     try {
       const { user_id } = req.params;
 
@@ -1472,7 +1488,7 @@ export class OrderController {
   }
 
   // Send cart abandonment reminder
-  async sendCartAbandonmentReminder(req: Request, res: Response) {
+  async sendCartAbandonmentReminder(req: AuthRequest, res: Response) {
     try {
       const { user_id, cart_items } = req.body;
 
@@ -1512,7 +1528,7 @@ export class OrderController {
   }
 
   // Download order PDF
-  async downloadOrderPDF(req: Request, res: Response) {
+  async downloadOrderPDF(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
 

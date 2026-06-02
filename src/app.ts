@@ -1,8 +1,6 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import express, { Application, Request, Response } from 'express';
 import cors, { CorsOptions } from 'cors';
+import { frontendUrls } from './config/env';
 
 import productRoutes from './routes/product.routes';
 import orderRoutes from './routes/order.routes';
@@ -14,9 +12,11 @@ import uploadRoutes from './routes/upload.routes';
 import contactRoutes from './routes/contact.routes';
 import bulkOrderRoutes from './routes/bulkOrder.routes';
 import affiliateRoutes from './routes/affiliate.routes';
+import cookieParser from 'cookie-parser';
 import couponRoutes from './routes/coupon.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 import { publicRateLimiter } from './middleware/rateLimit.middleware';
+import { trackAffiliateClick } from './middleware/affiliateTracking.middleware';
 
 const app: Application = express();
 
@@ -27,9 +27,7 @@ const app: Application = express();
 app.set('trust proxy', 1);
 
 // Middleware
-const allowedOrigins: string[] = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+const allowedOrigins: string[] = frontendUrls;
 
 const corsOptions: CorsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
@@ -48,7 +46,7 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use(cookieParser());
 // Health check
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', message: 'VENTECH API is running' });
@@ -56,6 +54,7 @@ app.get('/health', (req: Request, res: Response) => {
 
 // API Routes with rate limiting
 // Note: Individual routes have specific rate limiters applied
+app.use(trackAffiliateClick);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
@@ -65,11 +64,12 @@ app.use('/api/investment', publicRateLimiter, investmentRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/bulk-orders', bulkOrderRoutes);
-app.use('/api/affiliate', publicRateLimiter, affiliateRoutes);
+
+app.use(['/api/affiliate', '/affiliate'], publicRateLimiter, affiliateRoutes);
 app.use('/api/coupons', publicRateLimiter, couponRoutes);
 
 // Error handling
 app.use(notFound);
-app.use(errorHandler);
+app.use(errorHandler); 
 
 export default app;

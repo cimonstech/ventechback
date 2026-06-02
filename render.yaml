@@ -46,4 +46,13 @@ services:
         sync: false
       - key: PAYSTACK_PUBLIC_KEY
         sync: false
+      # PayPal Configuration
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_API_BASE
+        value: https://api-m.paypal.com
+      - key: PAYPAL_PAYOUT_CURRENCY
+        value: USD
 

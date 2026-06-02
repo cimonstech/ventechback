@@ -274,7 +274,7 @@ export const getFeaturedProducts = async (req: Request, res: Response) => {
     const { data, error } = await supabaseAdmin
       .from('products')
       .select(
-        'id, name, slug, description, thumbnail, images, original_price, discount_price, rating, review_count, in_stock, stock_quantity, created_at, updated_at, category_id, brand_id'
+        'id, name, slug, description, thumbnail, images, price, discount_price, rating, review_count, in_stock, stock_quantity, created_at, updated_at, category_id, brand_id'
       )
       .eq(columnName, true)
       .eq('in_stock', true)
