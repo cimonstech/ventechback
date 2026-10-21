@@ -306,7 +306,7 @@ export const getFeaturedProducts = async (req: Request, res: Response) => {
 };
 
 // Helper function to invalidate cache (call this when products are updated)
-export const invalidateFeaturedProductsCache = () => {
+const invalidateFeaturedProductsCache = () => {
   featuredProductsCache.data = null;
   featuredProductsCache.timestamp = null;
   console.log('Featured products cache invalidated');

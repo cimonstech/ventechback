@@ -1,5 +1,4 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // Initialize R2 Client (S3-compatible)
 const r2Client = new S3Client({
@@ -160,34 +159,6 @@ export const deleteFromR2 = async (fileUrl: string): Promise<{ success: boolean;
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Delete failed',
-    };
-  }
-};
-
-/**
- * Get signed URL for temporary private access
- */
-export const getSignedUrlForR2 = async (
-  key: string,
-  expiresIn: number = 3600
-): Promise<{ success: boolean; url?: string; error?: string }> => {
-  try {
-    const command = new PutObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: key,
-    });
-
-    const signedUrl = await getSignedUrl(r2Client, command, { expiresIn });
-
-    return {
-      success: true,
-      url: signedUrl,
-    };
-  } catch (error) {
-    console.error('Error generating signed URL:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate URL',
     };
   }
 };

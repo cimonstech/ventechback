@@ -137,25 +137,6 @@ export const uploadRateLimiter = rateLimit({
 });
 
 /**
- * Admin Rate Limiter
- * - Admin operations
- * - 100 requests per minute per admin user
- */
-export const adminRateLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100, // 100 requests per window
-  message: 'Too many admin requests, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: standardHandler,
-  keyGenerator: getIdentifier,
-  skip: (req: Request) => {
-    // Only apply to authenticated admin users
-    return !(req as any).user || (req as any).user.role !== 'admin';
-  },
-});
-
-/**
  * Contact/Bulk Order Rate Limiter
  * - Contact form, bulk order requests
  * - 5 requests per hour per IP

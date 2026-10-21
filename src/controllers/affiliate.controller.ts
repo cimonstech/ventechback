@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendAffiliateApplicationEmail } from '../services/email.service';
 
-export class AffiliateController {
+class AffiliateController {
   // Submit affiliate application
   async submitAffiliateApplication(req: Request, res: Response) {
     try {

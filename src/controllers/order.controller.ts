@@ -1,5 +1,12 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { AuthRequest } from '../middleware/auth.middleware';
+import {
+  PricingError,
+  isValidPaymentReference,
+  priceOrder,
+  verifyPaystackPayment,
+} from '../services/pricing.service';
 import enhancedEmailService from '../services/enhanced-email.service';
 import pdfService from '../services/pdf.service';
 
@@ -183,8 +190,62 @@ export class OrderController {
     }
   }
 
+  // Admins see every order; customers only their own. Guest orders are
+  // reachable by their unguessable UUID, which the checkout success page needs.
+  private orderEmail(order: any): string {
+    return String(
+      order?.customer_bio?.email ||
+      order?.shipping_address?.email ||
+      order?.user?.email ||
+      ''
+    ).trim().toLowerCase();
+  }
+
+  // Account orders belong to that account. Guest orders are returned only
+  // when the caller repeats the email used at checkout.
+  private canAccessOrder(user: any, order: any, email?: string) {
+    if (user?.role === 'admin') return true;
+    if (order.user_id) return user?.id === order.user_id;
+    const expected = this.orderEmail(order);
+    const given = email?.trim().toLowerCase();
+    return !!given && !!expected && given === expected;
+  }
+
+  // Existing order for a Paystack payment (regular and pre-order are separate orders)
+  private async findOrderForPayment(paymentReference: string, isPreOrder: boolean) {
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('shipping_address->>payment_reference', paymentReference);
+    if (error) throw error;
+    return (data || []).find((o: any) => !!o.shipping_address?.is_pre_order === isPreOrder) || null;
+  }
+
+  // Get the items of one order (admin)
+  async getOrderItems(req: Request, res: Response) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('order_items')
+        .select('*')
+        .eq('order_id', req.params.id);
+
+      if (error) throw error;
+
+      res.json({
+        success: true,
+        data: data || [],
+      });
+    } catch (error) {
+      console.error('Error fetching order items:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch order items',
+      });
+    }
+  }
+
   // Get order by ID
-  async getOrderById(req: Request, res: Response) {
+  async getOrderById(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
 
@@ -199,6 +260,14 @@ export class OrderController {
         .single();
 
       if (error) throw error;
+
+      const email = typeof req.query.email === 'string' ? req.query.email : undefined;
+      if (!this.canAccessOrder(req.user, data, email)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found',
+        });
+      }
 
       // Extract is_pre_order from shipping_address if it exists there
       // Also check if it's a direct column (for backward compatibility)
@@ -448,7 +517,7 @@ export class OrderController {
   }
 
   // Cancel order (supports both logged-in and anonymous users)
-  async cancelOrder(req: Request, res: Response) {
+  async cancelOrder(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
       const { cancellation_reason, email } = req.body;
@@ -472,10 +541,18 @@ export class OrderController {
         });
       }
 
-      // Verify ownership for anonymous users
-      if (!existingOrder.user_id && email) {
+      // Account orders: only the owner or an admin may cancel
+      if (existingOrder.user_id) {
+        const isOwner = req.user?.id === existingOrder.user_id;
+        if (!isOwner && req.user?.role !== 'admin') {
+          return res.status(403).json({
+            success: false,
+            message: 'You are not allowed to cancel this order',
+          });
+        }
+      } else if (email) {
         // Anonymous order - verify email matches
-        const orderEmail = existingOrder.shipping_address?.email;
+        const orderEmail = existingOrder.customer_bio?.email || existingOrder.shipping_address?.email;
         if (!orderEmail || orderEmail.toLowerCase() !== email.toLowerCase()) {
           return res.status(403).json({
             success: false,
@@ -665,10 +742,10 @@ export class OrderController {
   }
 
   // Create order (with email confirmation)
-  async createOrder(req: Request, res: Response) {
+  async createOrder(req: AuthRequest, res: Response) {
     try {
       console.log('📦 Order creation request received:', {
-        hasUserId: !!req.body.user_id,
+        hasUserId: !!req.user?.id,
         hasOrderItems: !!req.body.order_items,
         orderItemsCount: req.body.order_items?.length || 0,
         hasDeliveryAddress: !!req.body.delivery_address,
@@ -677,36 +754,26 @@ export class OrderController {
         total: req.body.total,
       });
 
+      // The customer comes from the auth token, never from the request body
+      const user_id: string | null = req.user?.id ?? null;
+
       const {
-        user_id,
-        order_number, // Optional - will be generated if not provided
-        subtotal,
-        discount,
-        tax,
-        delivery_fee,
         delivery_option,
-        total,
         payment_method,
         delivery_address,
         customer_bio, // Customer bio information (name, email, phone)
         order_items,
         notes,
-        payment_reference,
+        payment_reference: rawPaymentReference,
+        coupon_id,
         // Pre-order fields
         is_pre_order,
         pre_order_shipping_option,
         estimated_arrival_date,
       } = req.body;
-
-      // ✅ CRITICAL: Frontend sends all amounts in GHS
-      // DO NOT apply heuristic normalization - values are already in GHS
-      // Only Paystack responses need conversion (handled in payment.controller.ts)
-      
-      // Use values as-is (already in GHS from frontend)
-      const finalSubtotal = subtotal || 0;
-      const finalDeliveryFee = delivery_fee || 0;
-      const finalTax = tax || 0;
-      const finalDiscount = discount || 0;
+      const isPreOrderOrder = !!is_pre_order;
+      // Only Paystack orders carry a payment reference
+      const payment_reference: string | null = payment_method === 'paystack' ? rawPaymentReference : null;
 
       // Validate required fields
       if (!order_items || !Array.isArray(order_items) || order_items.length === 0) {
@@ -727,180 +794,107 @@ export class OrderController {
         });
       }
 
-      // Validate total (already in GHS from frontend)
-      if (!total || total <= 0) {
-        console.error('❌ Order creation failed: Invalid total amount', {
-          total,
-        });
+      if (payment_method === 'paystack' && !isValidPaymentReference(rawPaymentReference)) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid total amount',
-          error: 'Total must be greater than 0',
+          message: 'A valid payment reference is required for card/mobile money payments',
+          error: 'INVALID_PAYMENT_REFERENCE',
         });
       }
 
-      // Validate that all products exist BEFORE creating the order
-      // This prevents orphaned orders if products don't exist
-      const productIds = order_items.map((item: any) => item.product_id);
-      console.log('🔍 STEP 1: Validating products before creating order');
-      console.log('🔍 Product IDs to validate:', productIds);
-      console.log('🔍 Order items structure:', order_items.map((item: any) => ({ 
-        product_id: item.product_id, 
-        product_name: item.product_name 
-      })));
-      
-      if (!productIds || productIds.length === 0) {
-        console.error('❌ No product IDs found in order items');
-        return res.status(400).json({
-          success: false,
-          message: 'No product IDs found in order items',
-          error: 'INVALID_ORDER_ITEMS',
-        });
-      }
-
-      // Filter out any null/undefined product IDs
-      const validProductIds = productIds.filter((id: string) => id && id.trim() !== '');
-      if (validProductIds.length !== productIds.length) {
-        console.error('❌ Some order items have invalid product IDs');
-        return res.status(400).json({
-          success: false,
-          message: 'Some order items have invalid product IDs',
-          error: 'INVALID_PRODUCT_IDS',
-        });
-      }
-
-      const { data: existingProducts, error: productsCheckError } = await supabaseAdmin
-        .from('products')
-        .select('id, name, in_stock')
-        .in('id', validProductIds);
-
-      console.log('🔍 Products found in database:', existingProducts?.length || 0, 'out of', validProductIds.length);
-
-      if (productsCheckError) {
-        console.error('❌ Error checking products:', productsCheckError);
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to validate products',
-          error: productsCheckError.message,
-        });
-      }
-
-      const existingProductIds = new Set((existingProducts || []).map((p: any) => p.id));
-      const missingProductIds = validProductIds.filter((id: string) => !existingProductIds.has(id));
-
-      if (missingProductIds.length > 0) {
-        console.error('❌ STEP 1 FAILED: Some products do not exist:', missingProductIds);
-        console.error('❌ Existing product IDs:', Array.from(existingProductIds));
-        return res.status(400).json({
-          success: false,
-          message: `Products not found: ${missingProductIds.join(', ')}. These products may have been removed from the catalog.`,
-          error: 'PRODUCTS_NOT_FOUND',
-          missingProductIds,
-        });
-      }
-
-      console.log('✅ STEP 1 PASSED: All products validated successfully');
-
-      // Generate order number if not provided (backend generates sequential number)
-      const finalOrderNumber = order_number || await this.generateOrderNumber();
-      console.log('✅ Generated order number:', finalOrderNumber);
-
-      // Map delivery_address to shipping_address and include delivery_option in the address JSON
-      const shippingAddress = delivery_address ? {
-        ...delivery_address,
-        delivery_option: delivery_option || { name: 'Standard', price: delivery_fee || 0 },
-        // Include pre-order information in shipping address
-        ...(is_pre_order ? {
-          is_pre_order: true,
-          pre_order_shipping_option: pre_order_shipping_option || null,
-          estimated_arrival_date: estimated_arrival_date || null,
-        } : {}),
-      } : null;
-
-      // ✅ Calculate total from values (all already in GHS from frontend)
-      // Recalculate subtotal from order items if missing
-      let actualSubtotal = finalSubtotal;
-      
-      if (!finalSubtotal || finalSubtotal === 0) {
-        console.warn('⚠️ Subtotal missing or zero, recalculating from order items');
-        actualSubtotal = order_items.reduce((sum: number, item: any) => {
-          // Use item subtotal if available, otherwise calculate from unit_price * quantity
-          const itemSubtotal = item.subtotal || (item.unit_price * (item.quantity || 1));
-          return sum + itemSubtotal;
-        }, 0);
-      }
-      
-      // ✅ CRITICAL: Calculate total from components ONLY - NEVER use req.body.total directly
-      // req.body.total might be in pesewas (from Paystack) or incorrect
-      // ALWAYS calculate from: subtotal + delivery_fee + tax - discount
-      const calculatedTotal = actualSubtotal + finalDeliveryFee + finalTax - finalDiscount;
-      
-      // ✅ NEVER use req.body.total - always use calculated value
-      const finalTotal = calculatedTotal;
-      
-      // ✅ Safety check: Warn if req.body.total differs significantly from calculated total
-      // This catches cases where Paystack amount (pesewas) was sent as total
-      if (total && Math.abs(total - finalTotal) > 0.01) {
-        const difference = Math.abs(total - finalTotal);
-        const ratio = total > finalTotal ? total / finalTotal : finalTotal / total;
-        
-        // If difference is significant (more than 1% or > 100x), log warning
-        if (difference > finalTotal * 0.01 || ratio > 10) {
-          console.warn('⚠️ WARNING: req.body.total differs from calculated total:', {
-            reqBodyTotal: total,
-            calculatedTotal: finalTotal,
-            difference,
-            ratio,
-            possibleCause: ratio > 10 ? 'Paystack amount (pesewas) may have been sent as total' : 'Frontend calculation mismatch',
+      // One order per payment reference and order type. Repeat requests (the
+      // payment callback page and the Paystack webhook) get the existing order.
+      if (payment_method === 'paystack') {
+        const existingOrder = await this.findOrderForPayment(rawPaymentReference, isPreOrderOrder);
+        if (existingOrder) {
+          console.log(`ℹ️ Order ${existingOrder.order_number} already exists for payment ${payment_reference}`);
+          return res.json({
+            success: true,
+            message: 'Order already exists for this payment',
+            data: existingOrder,
           });
         }
       }
-      
-      console.log('💰 Order calculation (all values in GHS):', {
+
+      // ✅ All amounts are worked out on the server from the database.
+      // Prices, delivery fees and discounts sent by the browser are ignored.
+      const priced = await priceOrder({
+        items: order_items.map((item: any) => ({
+          product_id: item.product_id,
+          quantity: Number(item.quantity),
+          selected_variants: item.selected_variants,
+        })),
+        isPreOrder: isPreOrderOrder,
+        deliveryOptionId: delivery_option?.id ?? null,
+        preOrderShippingOption: pre_order_shipping_option ?? null,
+        couponId: coupon_id ?? null,
+        userId: user_id,
+      });
+
+      const actualSubtotal = priced.subtotal;
+      const finalDeliveryFee = priced.deliveryFee;
+      const finalTax = priced.tax;
+      const finalDiscount = priced.discount;
+      const finalTotal = priced.total;
+
+      console.log('💰 Server-calculated order total (GHS):', {
         subtotal: actualSubtotal,
         delivery_fee: finalDeliveryFee,
         tax: finalTax,
         discount: finalDiscount,
-        calculatedTotal: finalTotal,
-        reqBodyTotal: total, // Logged for comparison only, NOT used
+        total: finalTotal,
+        clientTotal: req.body.total, // Logged for comparison only, NOT used
       });
-      
-      // ✅ Safety check: Ensure total is reasonable
-      if (finalTotal < 0) {
-        console.error('🚨 Negative order total detected:', {
-          finalTotal,
-          actualSubtotal,
-          finalDeliveryFee,
-          finalTax,
-          finalDiscount,
-        });
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid order total: negative amount detected.',
-          error: 'NEGATIVE_ORDER_TOTAL',
-        });
+
+      // Card/mobile money: confirm with Paystack that the money actually arrived,
+      // and that it covers every order placed against this payment.
+      let paymentStatus: 'paid' | 'pending' = 'pending';
+      if (payment_method === 'paystack') {
+        const payment = await verifyPaystackPayment(rawPaymentReference);
+
+        const { data: ordersForPayment, error: ordersForPaymentError } = await supabaseAdmin
+          .from('orders')
+          .select('total')
+          .eq('shipping_address->>payment_reference', payment_reference);
+        if (ordersForPaymentError) throw ordersForPaymentError;
+
+        const alreadyCovered = (ordersForPayment || []).reduce(
+          (sum: number, o: any) => sum + (Number(o.total) || 0),
+          0
+        );
+
+        if (alreadyCovered + finalTotal > payment.amountGhs + 0.01) {
+          console.error('🚨 Payment amount does not cover order total:', {
+            payment_reference,
+            paid: payment.amountGhs,
+            alreadyCovered,
+            orderTotal: finalTotal,
+          });
+          return res.status(400).json({
+            success: false,
+            message: `The amount paid does not match the order total. Please contact support with payment reference ${payment_reference}.`,
+            error: 'PAYMENT_AMOUNT_MISMATCH',
+          });
+        }
+
+        paymentStatus = 'paid';
       }
-      
-      // ✅ CRITICAL: Hard guard against pesewas being sent as GHS
-      // If total > 100,000 GHS, it's almost certainly pesewas (100x conversion error)
-      // Legitimate orders in Ghana rarely exceed 100,000 GHS
-      if (finalTotal > 100000) {
-        console.error('🚨 CRITICAL: Order total exceeds 100,000 GHS - likely pesewas conversion error:', {
-          finalTotal,
-          reqBodyTotal: total,
-          actualSubtotal,
-          finalDeliveryFee,
-          finalTax,
-          finalDiscount,
-          possibleCause: 'Paystack metadata prices (pesewas) may have been used as GHS',
-        });
-        return res.status(400).json({
-          success: false,
-          message: `Invalid order total detected (${finalTotal.toFixed(2)} GHS). Prices must be in GHS, not pesewas. Please contact support.`,
-          error: 'INVALID_TOTAL_PESEWAS_DETECTED',
-          details: 'Order total exceeds reasonable limit. This may indicate prices were sent in pesewas instead of GHS.',
-        });
-      }
+
+      // Order numbers are always generated by the backend
+      const finalOrderNumber = await this.generateOrderNumber();
+      console.log('✅ Generated order number:', finalOrderNumber);
+
+      // Map delivery_address to shipping_address and include delivery_option in the address JSON
+      const shippingAddress = {
+        ...delivery_address,
+        delivery_option: { ...(delivery_option || { name: 'Standard' }), price: finalDeliveryFee },
+        // Include pre-order information in shipping address
+        ...(isPreOrderOrder ? {
+          is_pre_order: true,
+          pre_order_shipping_option: pre_order_shipping_option || null,
+          estimated_arrival_date: estimated_arrival_date || null,
+        } : {}),
+      };
 
       // Create order
       // Note: payment_reference column does NOT exist in orders table
@@ -917,20 +911,18 @@ export class OrderController {
         // calculatedTotal is: subtotal + delivery_fee + tax - discount (all in GHS)
         total: finalTotal, // ✅ Calculated total in GHS - NEVER use req.body.total directly
         payment_method,
-        shipping_address: shippingAddress ? {
+        shipping_address: {
           ...shippingAddress,
           // Only include payment_reference if provided (store in shipping_address JSON)
           ...(payment_reference ? { payment_reference } : {}),
-        } : null,
+        },
         customer_bio: customer_bio || null, // Store customer bio information
-        notes: is_pre_order 
+        notes: isPreOrderOrder
           ? `${notes || ''}\n\n[PRE-ORDER] Shipping: ${pre_order_shipping_option || 'Not specified'}. Estimated Arrival: ${estimated_arrival_date ? new Date(estimated_arrival_date).toLocaleDateString() : 'TBD'}`.trim()
           : (notes || null),
         status: 'pending',
-        // ✅ Consistent payment_status logic
-        // Set payment_status based on payment method
-        // If payment_method is paystack and payment_reference exists, payment was successful
-        payment_status: (payment_method === 'paystack' && payment_reference) ? 'paid' : 'pending',
+        // 'paid' only after Paystack has confirmed the payment above
+        payment_status: paymentStatus,
       };
 
       // DO NOT include payment_reference as a direct column - it doesn't exist in orders table
@@ -953,24 +945,11 @@ export class OrderController {
         user_id: orderData.user_id,
       });
 
-      // Create order items and decrease stock
-      // ✅ All item prices are already in GHS from frontend
-      const orderItems = order_items.map((item: any) => {
-        // Use item prices as-is (already in GHS)
-        const itemUnitPrice = item.unit_price || 0;
-        const itemSubtotal = item.subtotal || item.total_price || (itemUnitPrice * (item.quantity || 1));
-        
-        return {
-          order_id: orderData.id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          product_image: item.product_image,
-          quantity: item.quantity,
-          unit_price: itemUnitPrice, // ✅ Already in GHS
-          total_price: itemSubtotal, // ✅ Already in GHS
-          selected_variants: item.selected_variants,
-        };
-      });
+      // Create order items (server-priced) and decrease stock
+      const orderItems = priced.items.map((item) => ({
+        order_id: orderData.id,
+        ...item,
+      }));
 
       const { error: itemsError } = await supabaseAdmin
         .from('order_items')
@@ -1004,9 +983,11 @@ export class OrderController {
 
       // ✅ Atomic stock update: Decrease stock for each product (skip for pre-orders)
       // Use atomic update with WHERE clause to prevent race conditions
-      if (!is_pre_order) {
+      const decrementedStock: { product_id: string; quantity: number }[] = [];
+      let stockFailure: string | null = null;
+      if (!isPreOrderOrder) {
         try {
-          for (const item of order_items) {
+          for (const item of priced.items) {
             // ✅ Atomic update: Only decrement if stock >= quantity
             // This prevents overselling when multiple orders are placed simultaneously
             const { data: updatedProduct, error: updateError } = await supabaseAdmin
@@ -1046,7 +1027,9 @@ export class OrderController {
 
                     if (atomicUpdateError || !updatedProduct) {
                       console.error(`❌ Failed to update stock for product ${item.product_id}:`, atomicUpdateError);
+                      stockFailure = stockFailure || `${item.product_name} could not be reserved.`;
                     } else {
+                      decrementedStock.push({ product_id: item.product_id, quantity: item.quantity });
                       console.log(`✅ Decreased stock for product ${item.product_id}: ${currentStock} → ${newStock}`);
                       
                       // ✅ Check for out of stock and send notification
@@ -1105,27 +1088,63 @@ export class OrderController {
                     }
                   } else {
                     console.error(`❌ Insufficient stock for product ${item.product_id}: ${currentStock} < ${item.quantity}`);
-                    // Note: Order is already created, so we log but don't fail
-                    // In production, you might want to mark order as "stock_issue" or similar
+                    stockFailure = stockFailure || `${item.product_name} does not have enough stock for this order.`;
                   }
                 } else {
                   console.error(`❌ Error fetching product ${item.product_id} for stock update:`, productError);
+                  stockFailure = stockFailure || `${item.product_name} could not be reserved.`;
                 }
               } else {
                 console.error(`❌ Failed to update stock for product ${item.product_id}:`, updateError);
+                stockFailure = stockFailure || `${item.product_name} could not be reserved.`;
               }
             } else {
+              decrementedStock.push({ product_id: item.product_id, quantity: item.quantity });
               console.log(`✅ Decreased stock for product ${item.product_id} using RPC`);
             }
           }
         } catch (stockError) {
           console.error('❌ Error updating product stock:', stockError);
-          // Don't fail order creation if stock update fails - log and continue
+          stockFailure = stockFailure || 'Stock could not be reserved for this order.';
         }
       } else {
         console.log('⏭️ Skipping stock update for pre-order');
       }
-      // This allows the order to be created even if stock update fails
+
+      if (stockFailure) {
+        for (const taken of decrementedStock) {
+          const { data: product } = await supabaseAdmin
+            .from('products')
+            .select('stock_quantity')
+            .eq('id', taken.product_id)
+            .single();
+          if (product) {
+            const restored = (Number(product.stock_quantity) || 0) + taken.quantity;
+            await supabaseAdmin
+              .from('products')
+              .update({ stock_quantity: restored, in_stock: restored > 0 })
+              .eq('id', taken.product_id);
+          }
+        }
+
+        await supabaseAdmin
+          .from('orders')
+          .update({
+            status: 'cancelled',
+            notes: `${orderData.notes || ''}\n\n[CANCELLED] ${stockFailure}`.trim(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', orderData.id);
+
+        const paidNote = payment_method === 'paystack' && payment_reference
+          ? ` Your payment was received. Contact support with reference ${payment_reference}.`
+          : '';
+        return res.status(409).json({
+          success: false,
+          message: `${stockFailure}${paidNote}`,
+          error: 'INSUFFICIENT_STOCK',
+        });
+      }
 
       // Get user data for email (if logged in) - moved before transaction creation
       let userData: any = null;
@@ -1144,9 +1163,6 @@ export class OrderController {
       // Create transaction record for this order (even if pending)
       // This ensures all orders have a transaction record for tracking
       try {
-        // ✅ Consistent payment_status logic (same as order)
-        const paymentStatus = (payment_method === 'paystack' && payment_reference) ? 'paid' : 'pending';
-        
         // Determine customer email and name
         let customerEmail: string | null = null;
         let customerName: string = 'Customer';
@@ -1189,8 +1205,8 @@ export class OrderController {
           const { data: existingTransaction } = await supabaseAdmin
             .from('transactions')
             .select('id, metadata')
-            .eq('transaction_reference', payment_reference)
-            .or(`paystack_reference.eq.${payment_reference}`)
+            .or(`transaction_reference.eq.${payment_reference},paystack_reference.eq.${payment_reference}`)
+            .limit(1)
             .maybeSingle();
 
           if (existingTransaction) {
@@ -1302,23 +1318,22 @@ export class OrderController {
         console.warn('⚠️ No customer email found for order confirmation. user_id:', user_id, 'customer_bio:', orderData.customer_bio);
       }
 
-      // Record coupon usage if coupon was applied
-      // ✅ All values already in GHS from frontend
-      if (req.body.coupon_id && finalDiscount > 0) {
+      // Record coupon usage if the server accepted the coupon
+      if (priced.couponId && finalDiscount > 0) {
         try {
           const { error: couponUsageError } = await supabaseAdmin.rpc('record_coupon_usage', {
-            coupon_id_param: req.body.coupon_id,
+            coupon_id_param: priced.couponId,
             user_id_param: user_id || null,
             order_id_param: orderData.id,
-            discount_amount_param: finalDiscount, // ✅ Already in GHS from frontend
-            order_total_param: actualSubtotal, // ✅ Already in GHS from frontend - original total before discount
+            discount_amount_param: finalDiscount,
+            order_total_param: actualSubtotal, // Original total before discount
           });
 
           if (couponUsageError) {
             console.error('❌ Failed to record coupon usage:', couponUsageError);
             // Don't fail the order if coupon usage recording fails
           } else {
-            console.log(`✅ Recorded coupon usage for coupon ${req.body.coupon_id} on order ${orderData.id}`);
+            console.log(`✅ Recorded coupon usage for coupon ${priced.couponId} on order ${orderData.id}`);
           }
         } catch (couponError) {
           console.error('❌ Error recording coupon usage:', couponError);
@@ -1392,6 +1407,16 @@ export class OrderController {
         data: orderData,
       });
     } catch (error: any) {
+      if (error instanceof PricingError) {
+        console.warn(`⚠️ Order rejected (${error.code}): ${error.message}`);
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          error: error.code,
+          ...error.extra,
+        });
+      }
+
       console.error('❌ Error creating order:', {
         error,
         message: error instanceof Error ? error.message : 'Unknown error',

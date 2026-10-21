@@ -1,13 +1,15 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { AuthRequest } from '../middleware/auth.middleware';
 
 export class CouponController {
-  // Validate coupon code
-  async validateCoupon(req: Request, res: Response) {
+  // Validate coupon code. The shopper id comes from their login, not the body.
+  async validateCoupon(req: AuthRequest, res: Response) {
     try {
-      const { code, cart_amount, user_id } = req.body;
+      const { code, cart_amount } = req.body;
+      const cartAmount = Number(cart_amount);
 
-      if (!code || !cart_amount) {
+      if (!code || !Number.isFinite(cartAmount) || cartAmount < 0) {
         return res.status(400).json({
           success: false,
           message: 'Coupon code and cart amount are required',
@@ -17,8 +19,8 @@ export class CouponController {
       // Call the database function
       const { data, error } = await supabaseAdmin.rpc('validate_coupon', {
         coupon_code: code,
-        cart_amount: parseFloat(cart_amount),
-        user_id_param: user_id || null,
+        cart_amount: cartAmount,
+        user_id_param: req.user?.id || null,
       });
 
       if (error) {
@@ -45,7 +47,7 @@ export class CouponController {
         success: true,
         data: {
           is_valid: true,
-          discount_amount: parseFloat(data.discount_amount) || 0,
+          discount_amount: Math.min(parseFloat(data.discount_amount) || 0, cartAmount),
           error_message: '',
           coupon_id: data.coupon_id,
           coupon_name: data.coupon_name,
@@ -58,50 +60,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to validate coupon',
-        error: error.message,
-      });
-    }
-  }
-
-  // Record coupon usage
-  async recordCouponUsage(req: Request, res: Response) {
-    try {
-      const { coupon_id, user_id, order_id, discount_amount, order_total } = req.body;
-
-      if (!coupon_id || !order_id || discount_amount === undefined || !order_total) {
-        return res.status(400).json({
-          success: false,
-          message: 'Coupon ID, order ID, discount amount, and order total are required',
-        });
-      }
-
-      // Call the database function
-      const { data, error } = await supabaseAdmin.rpc('record_coupon_usage', {
-        coupon_id_param: coupon_id,
-        user_id_param: user_id || null,
-        order_id_param: order_id,
-        discount_amount_param: parseFloat(discount_amount),
-        order_total_param: parseFloat(order_total),
-      });
-
-      if (error) {
-        console.error('Error recording coupon usage:', error);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to record coupon usage',
-          error: error.message,
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: 'Coupon usage recorded successfully',
-      });
-    } catch (error: any) {
-      console.error('Error recording coupon usage:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to record coupon usage',
         error: error.message,
       });
     }

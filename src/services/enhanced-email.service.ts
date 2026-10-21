@@ -874,4 +874,4 @@ class EnhancedEmailService {
 }
 
 export default new EnhancedEmailService();
-export { sendInvestmentEmail } from './email.service';
+;

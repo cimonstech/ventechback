@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendContactEmail } from '../services/email.service';
 
-export class ContactController {
+class ContactController {
   // Submit contact form
   async submitContactForm(req: Request, res: Response) {
     try {

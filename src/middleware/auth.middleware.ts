@@ -61,5 +61,38 @@ export const isAdmin = (req: AuthRequest, res: Response, next: NextFunction) => 
   next();
 };
 
+export const requireAdmin = [authenticate, isAdmin];
+
+// Attaches req.user when a valid token is sent, but lets guests through.
+export const optionalAuth = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return next();
+  }
+
+  try {
+    const {
+      data: { user },
+    } = await supabaseAdmin.auth.getUser(authHeader.substring(7));
+
+    if (user) {
+      const { data: profile } = await supabaseAdmin
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      if (profile) req.user = profile;
+    }
+  } catch (error) {
+    console.error('Optional authentication error:', error);
+  }
+
+  next();
+};
+
 
 
