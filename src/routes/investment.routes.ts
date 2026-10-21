@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { sendInvestmentEmail } from '../services/email.service';
+import { contactRateLimiter } from '../middleware/rateLimit.middleware';
 
 const router = Router();
 
 // POST /api/investment - Submit investment form
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', contactRateLimiter, async (req: Request, res: Response) => {
   try {
     const { fullName, email, phone, tier, amount, plan, message } = req.body;
 

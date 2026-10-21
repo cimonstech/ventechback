@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendBulkOrderEmail } from '../services/email.service';
 
-export class BulkOrderController {
+class BulkOrderController {
   // Submit bulk order request
   async submitBulkOrderRequest(req: Request, res: Response) {
     try {

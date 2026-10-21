@@ -2,8 +2,12 @@ import { Router, Request, Response } from 'express';
 import { uploadSingle, uploadMultiple } from '../middleware/upload.middleware';
 import { uploadToR2, uploadMultipleToR2, deleteFromR2, listR2Files } from '../services/r2.service';
 import { uploadRateLimiter } from '../middleware/rateLimit.middleware';
+import { requireAdmin } from '../middleware/auth.middleware';
 
 const router = Router();
+
+// All upload routes are admin only
+router.use(requireAdmin);
 
 /**
  * POST /api/upload (catch-all for backward compatibility)

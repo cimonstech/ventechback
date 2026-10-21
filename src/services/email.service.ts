@@ -669,4 +669,3 @@ export const sendContactEmail = emailService.sendContactEmail.bind(emailService)
 export const sendBulkOrderEmail = emailService.sendBulkOrderEmail.bind(emailService);
 export const sendAffiliateApplicationEmail = emailService.sendAffiliateApplicationEmail.bind(emailService);
 
-export default emailService;

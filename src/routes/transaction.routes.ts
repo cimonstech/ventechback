@@ -1,8 +1,12 @@
 import express from 'express';
 import { TransactionController } from '../controllers/transaction.controller';
+import { requireAdmin } from '../middleware/auth.middleware';
 
 const router = express.Router();
 const transactionController = new TransactionController();
+
+// All transaction routes are admin only
+router.use(requireAdmin);
 
 // Get all transactions (admin)
 router.get('/', transactionController.getAllTransactions);
@@ -14,4 +18,3 @@ router.get('/:id', transactionController.getTransactionById);
 router.post('/:id/refund', transactionController.refundTransaction);
 
 export default router;
-

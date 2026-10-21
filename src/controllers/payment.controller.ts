@@ -1,18 +1,21 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { AuthRequest } from '../middleware/auth.middleware';
+import { PricingError, priceOrder } from '../services/pricing.service';
 
 export class PaymentController {
   // Initialize Paystack transaction (from backend as per Paystack best practices)
-  async initializeTransaction(req: Request, res: Response) {
+  async initializeTransaction(req: AuthRequest, res: Response) {
     try {
-      const { email, amount, reference, callback_url, metadata } = req.body;
+      const { email, reference, callback_url, metadata } = req.body;
+      const checkout = metadata?.checkout_data;
 
-      // Validate required fields
-      if (!email || !amount || !reference) {
+      // Validate required fields. The amount is calculated here, not taken from the browser.
+      if (!email || !reference || !checkout) {
         return res.status(400).json({
           success: false,
-          message: 'Email, amount, and reference are required',
+          message: 'Email, payment reference, and checkout details are required',
         });
       }
 
@@ -33,10 +36,60 @@ export class PaymentController {
         });
       }
 
+      const userId = req.user?.id ?? null;
+      const couponId = checkout.coupon_id || null;
+      const toPricedItems = (items: any[]) =>
+        (items || []).map((item) => ({
+          product_id: item.product_id || item.id,
+          quantity: Number(item.quantity),
+          selected_variants: item.selected_variants,
+        }));
+
+      let totalGhs = 0;
+      const regularItems = toPricedItems(checkout.regularItems);
+      const preOrderItems = toPricedItems(checkout.preOrderItems);
+
+      if (regularItems.length === 0 && preOrderItems.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Your cart is empty',
+        });
+      }
+
+      if (regularItems.length > 0) {
+        const priced = await priceOrder({
+          items: regularItems,
+          isPreOrder: false,
+          deliveryOptionId: checkout.delivery_option?.id ?? null,
+          couponId,
+          userId,
+        });
+        totalGhs += priced.total;
+      }
+
+      if (preOrderItems.length > 0) {
+        const priced = await priceOrder({
+          items: preOrderItems,
+          isPreOrder: true,
+          preOrderShippingOption: checkout.pre_order_shipping_option ?? null,
+          couponId: regularItems.length > 0 ? null : couponId,
+          userId,
+        });
+        totalGhs += priced.total;
+      }
+
+      const amountPesewas = Math.round(totalGhs * 100);
+      if (amountPesewas <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'This order does not have an amount that can be paid online',
+        });
+      }
+
       // Prepare Paystack initialize transaction payload
       const payload: any = {
         email,
-        amount: Math.round(amount), // Amount in pesewas (GHS * 100)
+        amount: amountPesewas,
         reference,
         currency: 'GHS',
       };
@@ -76,6 +129,14 @@ export class PaymentController {
         });
       }
     } catch (error: any) {
+      if (error instanceof PricingError) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          error: error.code,
+        });
+      }
+
       console.error('Error initializing Paystack transaction:', error);
       return res.status(500).json({
         success: false,
@@ -355,71 +416,93 @@ export class PaymentController {
           const { OrderController } = await import('./order.controller');
           const orderController = new OrderController();
 
-          // Create order using checkout data from metadata
-          try {
-            const userId = metadata.user_id && metadata.user_id !== 'guest' 
-              ? metadata.user_id 
-              : null;
+          // Create the same orders the payment callback page creates (regular
+          // and pre-order separately). createOrder is idempotent per payment
+          // reference, so whichever of the two arrives second is a no-op.
+          // Prices and totals are recalculated and verified by createOrder.
+          const userId = metadata.user_id && metadata.user_id !== 'guest'
+            ? metadata.user_id
+            : null;
 
-            // Calculate totals if not provided
-            const items = checkoutData.items || [];
-            const subtotal = checkoutData.subtotal || items.reduce((sum: number, item: any) => sum + (item.subtotal || (item.quantity * (item.discount_price || item.original_price || 0))), 0);
-            const deliveryFee = checkoutData.delivery_option?.price || checkoutData.delivery_fee || 0;
-            const tax = checkoutData.tax || 0;
-            const total = checkoutData.total || (subtotal + deliveryFee + tax);
+          const toOrderItems = (items: any[]) => (items || []).map((item: any) => ({
+            product_id: item.product_id || item.id,
+            quantity: item.quantity,
+            selected_variants: item.selected_variants || {},
+          }));
 
-            // Prepare order items
-            const orderItems = items.map((item: any) => ({
-              product_id: item.id,
-              product_name: item.name,
-              product_image: item.thumbnail || item.image_url || '',
-              quantity: item.quantity,
-              unit_price: item.discount_price || item.original_price || 0,
-              subtotal: item.subtotal || (item.quantity * (item.discount_price || item.original_price || 0)),
-              selected_variants: item.selected_variants || {},
-            }));
+          const baseBody = {
+            payment_method: 'paystack',
+            payment_reference: transaction.reference,
+            delivery_address: checkoutData.delivery_address,
+            customer_bio: checkoutData.customer_bio || null,
+            coupon_id: checkoutData.coupon_id || null,
+          };
 
-            console.log('📦 Creating order from webhook:', {
-              userId,
-              itemsCount: orderItems.length,
-              subtotal,
-              deliveryFee,
-              tax,
-              total,
-              hasDeliveryAddress: !!checkoutData.delivery_address,
-            });
-
-            // Prepare order creation request
-            const orderRequest = {
-              body: {
-                user_id: userId,
-                subtotal,
-                discount: checkoutData.discount || 0,
-                tax,
-                delivery_fee: deliveryFee,
-                delivery_option: checkoutData.delivery_option,
-                total,
-                payment_method: checkoutData.payment_method || 'paystack',
-                delivery_address: checkoutData.delivery_address,
-                order_items: orderItems,
-                notes: checkoutData.notes || null,
-                payment_reference: transaction.reference,
-              },
-            } as any;
-
-            // Create order
-            await orderController.createOrder(orderRequest, res);
-            
-            console.log('✅ Order created successfully from webhook');
-            return; // Response already sent by createOrder
-          } catch (orderError: any) {
-            console.error('❌ Error creating order from webhook:', orderError);
-            return res.status(500).json({
-              success: false,
-              message: 'Failed to create order from webhook',
-              error: orderError.message,
+          const orderBodies: any[] = [];
+          if (checkoutData.regularItems?.length) {
+            orderBodies.push({
+              ...baseBody,
+              order_items: toOrderItems(checkoutData.regularItems),
+              delivery_option: checkoutData.delivery_option,
+              notes: checkoutData.notes || null,
+              is_pre_order: false,
             });
           }
+          if (checkoutData.preOrderItems?.length) {
+            orderBodies.push({
+              ...baseBody,
+              order_items: toOrderItems(checkoutData.preOrderItems),
+              notes: checkoutData.notes || null,
+              is_pre_order: true,
+              pre_order_shipping_option: checkoutData.pre_order_shipping_option,
+              estimated_arrival_date: checkoutData.estimated_arrival_date,
+            });
+          }
+
+          if (orderBodies.length === 0) {
+            console.error('❌ No order items in webhook checkout data');
+            return res.json({ success: false, message: 'No order items in checkout data' });
+          }
+
+          // Run createOrder without letting it write to Paystack's response
+          const runCreateOrder = (body: any) =>
+            new Promise<{ status: number; payload: any }>((resolve) => {
+              const collector: any = {
+                statusCode: 200,
+                status(code: number) {
+                  this.statusCode = code;
+                  return this;
+                },
+                json(payload: any) {
+                  resolve({ status: this.statusCode, payload });
+                  return this;
+                },
+              };
+              orderController
+                .createOrder({ user: userId ? { id: userId } : undefined, body } as any, collector)
+                .catch((error: any) => resolve({ status: 500, payload: { message: error?.message } }));
+            });
+
+          const results = [];
+          for (const body of orderBodies) {
+            results.push(await runCreateOrder(body));
+          }
+
+          results.forEach(({ status, payload }) => {
+            if (status >= 400) {
+              console.error(`❌ Webhook order failed (${status}):`, payload?.message);
+            } else {
+              console.log(`✅ Webhook order ok: ${payload?.data?.order_number} (${payload?.message})`);
+            }
+          });
+
+          // 5xx asks Paystack to retry later; anything else is final
+          const retry = results.some(({ status }) => status >= 500);
+          return res.status(retry ? 500 : 200).json({
+            success: !retry,
+            message: 'Webhook processed',
+          });
+
         }
       }
 
@@ -437,48 +520,4 @@ export class PaymentController {
       });
     }
   }
-
-  // Update transaction with order_id after order is created
-  async updateOrderLink(req: Request, res: Response) {
-    try {
-      const { transaction_reference, order_id } = req.body;
-
-      if (!transaction_reference || !order_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'Transaction reference and order ID are required',
-        });
-      }
-
-      // Update transaction with order_id
-      const { error: updateError } = await supabaseAdmin
-        .from('transactions')
-        .update({
-          order_id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('transaction_reference', transaction_reference);
-
-      if (updateError) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to update transaction-order link',
-          error: updateError.message,
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: 'Transaction linked to order successfully',
-      });
-    } catch (error: any) {
-      console.error('Error updating transaction-order link:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to update transaction-order link',
-        error: error.message,
-      });
-    }
-  }
 }
-

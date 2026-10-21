@@ -22,5 +22,5 @@ export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
 
 console.log('✅ Supabase Admin Client initialized');
 
-export default supabaseAdmin;
+
 

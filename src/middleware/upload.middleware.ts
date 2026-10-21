@@ -24,7 +24,7 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
 };
 
 // Create multer upload instance
-export const upload = multer({
+const upload = multer({
   storage,
   fileFilter,
   limits: {
