@@ -8,7 +8,7 @@ import {
   deleteProduct,
   getAllCategories,
 } from '../controllers/product.controller';
-import { authenticate, isAdmin } from '../middleware/auth.middleware';
+import { requirePermission } from '../middleware/auth.middleware';
 import { 
   publicRateLimiter, 
   productDetailsRateLimiter,
@@ -33,9 +33,9 @@ router.get('/categories', publicRateLimiter, getAllCategories);
 router.get('/:slug', productDetailsRateLimiter, getProductBySlug);
 
 // Admin routes
-router.post('/', authenticate, isAdmin, createProduct);
-router.put('/:id', authenticate, isAdmin, updateProduct);
-router.delete('/:id', authenticate, isAdmin, deleteProduct);
+router.post('/', requirePermission('products', 'edit'), createProduct);
+router.put('/:id', requirePermission('products', 'edit'), updateProduct);
+router.delete('/:id', requirePermission('products', 'edit'), deleteProduct);
 
 export default router;
 

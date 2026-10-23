@@ -2,19 +2,16 @@ import { Router, Request, Response } from 'express';
 import { uploadSingle, uploadMultiple } from '../middleware/upload.middleware';
 import { uploadToR2, uploadMultipleToR2, deleteFromR2, listR2Files } from '../services/r2.service';
 import { uploadRateLimiter } from '../middleware/rateLimit.middleware';
-import { requireAdmin } from '../middleware/auth.middleware';
+import { requireAnyPermission } from '../middleware/auth.middleware';
 
 const router = Router();
-
-// All upload routes are admin only
-router.use(requireAdmin);
 
 /**
  * POST /api/upload (catch-all for backward compatibility)
  * POST /api/upload/single
  * Upload a single image
  */
-router.post('/', uploadRateLimiter, uploadSingle, async (req: Request, res: Response) => {
+router.post('/', requireAnyPermission(['products', 'content'], 'edit'), uploadRateLimiter, uploadSingle, async (req: Request, res: Response) => {
   // This handles /api/upload requests
   try {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
@@ -55,7 +52,7 @@ router.post('/', uploadRateLimiter, uploadSingle, async (req: Request, res: Resp
   }
 });
 
-router.post('/single', uploadRateLimiter, uploadSingle, async (req: Request, res: Response) => {
+router.post('/single', requireAnyPermission(['products', 'content'], 'edit'), uploadRateLimiter, uploadSingle, async (req: Request, res: Response) => {
   try {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     // Get file from either 'file' or 'image' field
@@ -99,7 +96,7 @@ router.post('/single', uploadRateLimiter, uploadSingle, async (req: Request, res
  * POST /api/upload/multiple
  * Upload multiple images
  */
-router.post('/multiple', uploadRateLimiter, uploadMultiple, async (req: Request, res: Response) => {
+router.post('/multiple', requireAnyPermission(['products', 'content'], 'edit'), uploadRateLimiter, uploadMultiple, async (req: Request, res: Response) => {
   try {
     const files = req.files as Express.Multer.File[];
 
@@ -142,7 +139,7 @@ router.post('/multiple', uploadRateLimiter, uploadMultiple, async (req: Request,
  * GET /api/upload/list
  * List all files in R2 (optionally filtered by folder)
  */
-router.get('/list', async (req: Request, res: Response) => {
+router.get('/list', requireAnyPermission(['products', 'content'], 'view'), async (req: Request, res: Response) => {
   try {
     const folder = req.query.folder as string | undefined;
     const maxKeys = parseInt(req.query.maxKeys as string) || 1000;
@@ -174,7 +171,7 @@ router.get('/list', async (req: Request, res: Response) => {
  * DELETE /api/upload
  * Delete an image from R2
  */
-router.delete('/', async (req: Request, res: Response) => {
+router.delete('/', requireAnyPermission(['products', 'content'], 'edit'), async (req: Request, res: Response) => {
   try {
     const { url } = req.body;
 

@@ -6,15 +6,15 @@ import {
   updateBanner,
   deleteBanner,
 } from '../controllers/banner.controller';
-import { authenticate, isAdmin } from '../middleware/auth.middleware';
+import { requirePermission } from '../middleware/auth.middleware';
 
 const router = Router();
 
 // Admin routes (must come before /:type to avoid route conflict)
-router.get('/', authenticate, isAdmin, getAllBanners);
-router.post('/', authenticate, isAdmin, createBanner);
-router.put('/:id', authenticate, isAdmin, updateBanner);
-router.delete('/:id', authenticate, isAdmin, deleteBanner);
+router.get('/', requirePermission('content', 'view'), getAllBanners);
+router.post('/', requirePermission('content', 'edit'), createBanner);
+router.put('/:id', requirePermission('content', 'edit'), updateBanner);
+router.delete('/:id', requirePermission('content', 'edit'), deleteBanner);
 
 // Public routes (must come after specific routes)
 router.get('/:type', getBannersByType);

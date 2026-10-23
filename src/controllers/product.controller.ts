@@ -312,9 +312,87 @@ const invalidateFeaturedProductsCache = () => {
   console.log('Featured products cache invalidated');
 };
 
+async function saveProductVariants(productId: string, variants: any[]) {
+  const { error: deleteMappingsError } = await supabaseAdmin
+    .from('product_attribute_mappings')
+    .delete()
+    .eq('product_id', productId);
+  if (deleteMappingsError) throw deleteMappingsError;
+
+  const { error: deleteOptionsError } = await supabaseAdmin
+    .from('product_selected_options')
+    .delete()
+    .eq('product_id', productId);
+  if (deleteOptionsError) throw deleteOptionsError;
+
+  if (variants.length === 0) return;
+
+  const mappings = variants.map((variant, index) => ({
+    product_id: productId,
+    attribute_id: variant.attribute_id,
+    is_required: variant.is_required,
+    display_order: index,
+  }));
+
+  const { error: mappingError } = await supabaseAdmin
+    .from('product_attribute_mappings')
+    .insert(mappings);
+  if (mappingError) throw mappingError;
+
+  const selectedOptions = variants.flatMap((variant) =>
+    (variant.selected_options || []).map((optionId: string) => ({
+      product_id: productId,
+      attribute_id: variant.attribute_id,
+      option_id: optionId,
+    }))
+  );
+
+  if (selectedOptions.length === 0) return;
+
+  const { error: optionsError } = await supabaseAdmin
+    .from('product_selected_options')
+    .insert(selectedOptions);
+  if (optionsError) throw optionsError;
+}
+
+function productWriteError(error: any, fallback: string): { message: string; status: number } {
+  const code = String(error?.code || '');
+  const raw = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+
+  if (code === '23505' || raw.includes('duplicate key')) {
+    if (raw.includes('products_sku_key') || raw.includes('(sku)')) {
+      return { message: 'A product with this SKU already exists. Choose a different SKU.', status: 409 };
+    }
+    if (raw.includes('products_slug_key') || raw.includes('(slug)')) {
+      return { message: 'A product with this web address already exists. Change the name or slug.', status: 409 };
+    }
+    return { message: 'A product with these details already exists.', status: 409 };
+  }
+
+  if (code === '23503' || raw.includes('foreign key')) {
+    return { message: 'The selected category or brand could not be found.', status: 400 };
+  }
+
+  if (code === '23502' || raw.includes('null value')) {
+    return { message: 'A required product field is missing.', status: 400 };
+  }
+
+  if (
+    raw.includes('fetch failed') ||
+    raw.includes('connect timeout') ||
+    raw.includes('und_err_connect_timeout') ||
+    raw.includes('econnrefused') ||
+    raw.includes('enotfound')
+  ) {
+    return { message: 'Could not reach the database. Check your connection and try again.', status: 503 };
+  }
+
+  return { message: fallback, status: 500 };
+}
+
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
-    const productData = req.body;
+    const { variants, ...productData } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('products')
@@ -324,6 +402,10 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     if (error) throw error;
 
+    if (Array.isArray(variants)) {
+      await saveProductVariants(data.id, variants);
+    }
+
     // Invalidate featured products cache if new product is featured
     if (productData.featured === true || productData.is_featured === true) {
       invalidateFeaturedProductsCache();
@@ -331,16 +413,16 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     return successResponse(res, data, 'Product created successfully', 201);
   } catch (error: any) {
-    console.error('Create product error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to create product');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    console.error('Create product error:', error?.message || error);
+    const { message, status } = productWriteError(error, 'Failed to create product');
+    return errorResponse(res, message, status);
   }
 };
 
 export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const { variants, ...updates } = req.body;
 
     // ✅ Auto-sync in_stock flag with stock_quantity
     // If stock_quantity is being updated, automatically set in_stock
@@ -360,6 +442,10 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       return errorResponse(res, 'Product not found', 404);
     }
 
+    if (Array.isArray(variants)) {
+      await saveProductVariants(Array.isArray(id) ? id[0] : id, variants);
+    }
+
     // Invalidate featured products cache if featured status, stock status, or created_at changed
     if (
       updates.featured !== undefined ||
@@ -373,9 +459,9 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
 
     return successResponse(res, data, 'Product updated successfully');
   } catch (error: any) {
-    console.error('Update product error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to update product');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    console.error('Update product error:', error?.message || error);
+    const { message, status } = productWriteError(error, 'Failed to update product');
+    return errorResponse(res, message, status);
   }
 };
 

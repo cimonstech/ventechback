@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
-import { AuthRequest } from '../middleware/auth.middleware';
+import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
 import {
   PricingError,
   isValidPaymentReference,
@@ -9,6 +9,7 @@ import {
 } from '../services/pricing.service';
 import enhancedEmailService from '../services/enhanced-email.service';
 import pdfService from '../services/pdf.service';
+import { logAudit } from '../services/audit.service';
 
 export class OrderController {
   // Get all orders (admin)
@@ -203,9 +204,11 @@ export class OrderController {
 
   // Account orders belong to that account. Guest orders are returned only
   // when the caller repeats the email used at checkout.
-  private canAccessOrder(user: any, order: any, email?: string) {
-    if (user?.role === 'admin') return true;
-    if (order.user_id) return user?.id === order.user_id;
+  private async canAccessOrder(req: AuthRequest, order: any, email?: string): Promise<boolean> {
+    const role = req.user?.role;
+    if (role === 'admin' || role === 'superadmin') return true;
+    if (role === 'staff' && await staffHasModuleAccess(req, 'orders', 'view')) return true;
+    if (order.user_id) return req.user?.id === order.user_id;
     const expected = this.orderEmail(order);
     const given = email?.trim().toLowerCase();
     return !!given && !!expected && given === expected;
@@ -262,7 +265,7 @@ export class OrderController {
       if (error) throw error;
 
       const email = typeof req.query.email === 'string' ? req.query.email : undefined;
-      if (!this.canAccessOrder(req.user, data, email)) {
+      if (!(await this.canAccessOrder(req, data, email))) {
         return res.status(404).json({
           success: false,
           message: 'Order not found',
@@ -400,6 +403,15 @@ export class OrderController {
 
       if (orderError) throw orderError;
 
+      await logAudit({
+        req,
+        entity: 'orders',
+        entityId: id,
+        action: 'update_status',
+        before: existingOrder,
+        after: orderData,
+      });
+
       // Extract is_pre_order from updated orderData (reuse existing isPreOrder variable from above)
       // Update isPreOrder with value from orderData if available, otherwise keep existing value
       const finalIsPreOrder = orderData.is_pre_order || orderData.shipping_address?.is_pre_order || isPreOrder;
@@ -484,6 +496,18 @@ export class OrderController {
         });
       }
 
+      const { data: existingOrder, error: fetchError } = await supabaseAdmin
+        .from('orders')
+        .select(`
+          *,
+          user:users!orders_user_id_fkey(id, first_name, last_name, email),
+          order_items:order_items(*)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
       // Update payment status
       const { data: orderData, error: orderError } = await supabaseAdmin
         .from('orders')
@@ -500,6 +524,15 @@ export class OrderController {
         .single();
 
       if (orderError) throw orderError;
+
+      await logAudit({
+        req,
+        entity: 'orders',
+        entityId: id,
+        action: 'update_payment_status',
+        before: existingOrder,
+        after: orderData,
+      });
 
       res.json({
         success: true,
@@ -541,10 +574,16 @@ export class OrderController {
         });
       }
 
-      // Account orders: only the owner or an admin may cancel
+      // Account orders: owner, admin, superadmin, or staff with orders edit
       if (existingOrder.user_id) {
         const isOwner = req.user?.id === existingOrder.user_id;
-        if (!isOwner && req.user?.role !== 'admin') {
+        const role = req.user?.role;
+        const isPrivileged = role === 'admin' || role === 'superadmin';
+        const staffCanEditOrders = !isOwner && !isPrivileged
+          ? await staffHasModuleAccess(req, 'orders', 'edit')
+          : false;
+
+        if (!isOwner && !isPrivileged && !staffCanEditOrders) {
           return res.status(403).json({
             success: false,
             message: 'You are not allowed to cancel this order',
