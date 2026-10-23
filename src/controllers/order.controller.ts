@@ -64,6 +64,14 @@ export class OrderController {
 
   // Track order by number/ID and email (public endpoint with email verification)
   async trackOrder(req: Request, res: Response) {
+    const notFoundMessage = "We couldn't find an order with that number. Check the number and the email you used at checkout.";
+    const serverMessage = 'Something went wrong. Please try again in a moment.';
+    const orderSelect = `
+      *,
+      user:users!orders_user_id_fkey(id, email),
+      order_items:order_items(*)
+    `;
+
     try {
       const { order_number_or_id, email } = req.body;
 
@@ -74,58 +82,20 @@ export class OrderController {
         });
       }
 
-      // ✅ Safer pattern: Avoid mutating destructured variables
-      // Try to find order by order_number first, then by id
-      // IMPORTANT: Do NOT filter by status - include ALL orders including cancelled ones
-      let order = null;
-      let fetchError = null;
+      const lookup = String(order_number_or_id).trim();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(lookup);
 
-      const byNumberResult = await supabaseAdmin
-        .from('orders')
-        .select(`
-          *,
-          user:users!orders_user_id_fkey(id, email),
-          order_items:order_items(*)
-        `)
-        .eq('order_number', order_number_or_id)
-        .maybeSingle();
-
-      if (byNumberResult.data) {
-        order = byNumberResult.data;
-      } else if (byNumberResult.error) {
-        fetchError = byNumberResult.error;
-      }
-
-      // If not found by order_number, try by id
-      if (!order && !fetchError) {
-        const byIdResult = await supabaseAdmin
-          .from('orders')
-          .select(`
-            *,
-            user:users!orders_user_id_fkey(id, email),
-            order_items:order_items(*)
-          `)
-          .eq('id', order_number_or_id)
-          .maybeSingle();
-        
-        if (byIdResult.data) {
-          order = byIdResult.data;
-        } else if (byIdResult.error) {
-          fetchError = byIdResult.error;
-        }
-      }
+      // A non-UUID must never be compared with orders.id.
+      const query = supabaseAdmin.from('orders').select(orderSelect);
+      const { data: order, error: fetchError } = isUuid
+        ? await query.eq('id', lookup).maybeSingle()
+        : await query.ilike('order_number', lookup.replace(/[%_\\]/g, '\\$&')).maybeSingle();
 
       if (fetchError) {
-        console.error('Error fetching order for tracking:', {
-          code: fetchError.code,
-          message: fetchError.message,
-          details: fetchError.details,
-          hint: fetchError.hint,
-        });
+        console.error('Error tracking order:', req.originalUrl, fetchError);
         return res.status(500).json({
           success: false,
-          message: 'Failed to fetch order',
-          error: fetchError.message,
+          message: serverMessage,
         });
       }
 
@@ -135,7 +105,7 @@ export class OrderController {
         await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 50));
         return res.status(404).json({
           success: false,
-          message: 'Order not found',
+          message: notFoundMessage,
         });
       }
 
@@ -159,7 +129,7 @@ export class OrderController {
         await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 50));
         return res.status(404).json({
           success: false,
-          message: 'Order not found',
+          message: notFoundMessage,
         });
       }
 
@@ -182,11 +152,10 @@ export class OrderController {
         data: orderData,
       });
     } catch (error) {
-      console.error('Error tracking order:', error);
+      console.error('Error tracking order:', req.originalUrl, error);
       res.status(500).json({
         success: false,
-        message: 'Failed to track order',
-        error: error instanceof Error ? error.message : 'Unknown error',
+        message: serverMessage,
       });
     }
   }
