@@ -355,6 +355,41 @@ async function saveProductVariants(productId: string, variants: any[]) {
   if (optionsError) throw optionsError;
 }
 
+function productWriteError(error: any, fallback: string): { message: string; status: number } {
+  const code = String(error?.code || '');
+  const raw = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+
+  if (code === '23505' || raw.includes('duplicate key')) {
+    if (raw.includes('products_sku_key') || raw.includes('(sku)')) {
+      return { message: 'A product with this SKU already exists. Choose a different SKU.', status: 409 };
+    }
+    if (raw.includes('products_slug_key') || raw.includes('(slug)')) {
+      return { message: 'A product with this web address already exists. Change the name or slug.', status: 409 };
+    }
+    return { message: 'A product with these details already exists.', status: 409 };
+  }
+
+  if (code === '23503' || raw.includes('foreign key')) {
+    return { message: 'The selected category or brand could not be found.', status: 400 };
+  }
+
+  if (code === '23502' || raw.includes('null value')) {
+    return { message: 'A required product field is missing.', status: 400 };
+  }
+
+  if (
+    raw.includes('fetch failed') ||
+    raw.includes('connect timeout') ||
+    raw.includes('und_err_connect_timeout') ||
+    raw.includes('econnrefused') ||
+    raw.includes('enotfound')
+  ) {
+    return { message: 'Could not reach the database. Check your connection and try again.', status: 503 };
+  }
+
+  return { message: fallback, status: 500 };
+}
+
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { variants, ...productData } = req.body;
@@ -378,9 +413,9 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     return successResponse(res, data, 'Product created successfully', 201);
   } catch (error: any) {
-    console.error('Create product error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to create product');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    console.error('Create product error:', error?.message || error);
+    const { message, status } = productWriteError(error, 'Failed to create product');
+    return errorResponse(res, message, status);
   }
 };
 
@@ -424,9 +459,9 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
 
     return successResponse(res, data, 'Product updated successfully');
   } catch (error: any) {
-    console.error('Update product error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to update product');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    console.error('Update product error:', error?.message || error);
+    const { message, status } = productWriteError(error, 'Failed to update product');
+    return errorResponse(res, message, status);
   }
 };
 
