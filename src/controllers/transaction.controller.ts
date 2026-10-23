@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { logAudit } from '../services/audit.service';
 
 export class TransactionController {
   // Get all transactions (admin)
@@ -147,6 +148,15 @@ export class TransactionController {
       }
 
       console.log(`✅ Transaction ${transaction.transaction_reference || id} refunded successfully`);
+
+      await logAudit({
+        req,
+        entity: 'transactions',
+        entityId: id,
+        action: 'refund',
+        before: transaction,
+        after: updatedTransaction,
+      });
 
       res.json({
         success: true,

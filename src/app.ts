@@ -15,6 +15,9 @@ import contactRoutes from './routes/contact.routes';
 import bulkOrderRoutes from './routes/bulkOrder.routes';
 import affiliateRoutes from './routes/affiliate.routes';
 import couponRoutes from './routes/coupon.routes';
+import auditRoutes from './routes/audit.routes';
+import staffRoutes from './routes/staff.routes';
+import accessRoutes from './routes/access.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 import { publicRateLimiter } from './middleware/rateLimit.middleware';
 
@@ -27,25 +30,44 @@ const app: Application = express();
 app.set('trust proxy', 1);
 
 // Middleware
-const allowedOrigins: string[] = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+const allowedOrigins: string[] = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((url) => url.trim())
+  .filter((url) => url.length > 0);
+
+if (process.env.NODE_ENV !== 'production') {
+  for (const localOrigin of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+    if (!allowedOrigins.includes(localOrigin)) {
+      allowedOrigins.push(localOrigin);
+    }
+  }
+}
+
+const rejectedOrigins = new Set<string>();
 
 const corsOptions: CorsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow requests with no origin (server-to-server, Paystack webhooks, curl)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow all origins in development
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
+
+    if (!rejectedOrigins.has(origin)) {
+      rejectedOrigins.add(origin);
+      console.warn(`CORS rejected origin: ${origin}`);
+    }
+    return callback(null, false);
   },
   credentials: true,
 };
 
 app.use(cors(corsOptions));
+
+// Paystack signs the raw bytes. This path must stay a Buffer.
+// body-parser sets req._body, so the global express.json() below skips it.
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -67,6 +89,9 @@ app.use('/api/contact', contactRoutes);
 app.use('/api/bulk-orders', bulkOrderRoutes);
 app.use('/api/affiliate', publicRateLimiter, affiliateRoutes);
 app.use('/api/coupons', publicRateLimiter, couponRoutes);
+app.use('/api/admin/audit-log', auditRoutes);
+app.use('/api/admin/staff', staffRoutes);
+app.use('/api/me', accessRoutes);
 
 // Error handling
 app.use(notFound);

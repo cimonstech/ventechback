@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
@@ -351,7 +352,6 @@ export class PaymentController {
   // Handle Paystack webhook (for automatic order creation after payment)
   async handleWebhook(req: Request, res: Response) {
     try {
-      const crypto = require('crypto');
       const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
       
       if (!paystackSecretKey) {
@@ -363,8 +363,8 @@ export class PaymentController {
       }
 
       // Verify webhook signature (Paystack sends X-Paystack-Signature header)
-      const signature = req.headers['x-paystack-signature'] as string;
-      if (!signature) {
+      const signature = req.headers['x-paystack-signature'];
+      if (!signature || Array.isArray(signature)) {
         console.error('Missing Paystack signature in webhook');
         return res.status(400).json({
           success: false,
@@ -372,21 +372,37 @@ export class PaymentController {
         });
       }
 
-      // Verify signature
-      const hash = crypto
-        .createHmac('sha512', paystackSecretKey)
-        .update(JSON.stringify(req.body))
-        .digest('hex');
-
-      if (hash !== signature) {
-        console.error('Invalid Paystack webhook signature');
-        return res.status(400).json({
+      const rawBody = req.body;
+      if (!Buffer.isBuffer(rawBody)) {
+        console.warn('Invalid Paystack webhook signature');
+        return res.status(401).json({
           success: false,
           message: 'Invalid signature',
         });
       }
 
-      const event = req.body;
+      // HMAC of the raw bytes Paystack signed, not a re-serialized object
+      const digest = crypto
+        .createHmac('sha512', paystackSecretKey)
+        .update(rawBody)
+        .digest('hex');
+      const digestBuffer = Buffer.from(digest, 'utf8');
+      const signatureBuffer = Buffer.from(signature, 'utf8');
+
+      if (
+        digestBuffer.length !== signatureBuffer.length ||
+        !crypto.timingSafeEqual(digestBuffer, signatureBuffer)
+      ) {
+        console.warn('Invalid Paystack webhook signature');
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid signature',
+        });
+      }
+
+      console.log('Paystack webhook signature verified');
+
+      const event = JSON.parse(rawBody.toString('utf8'));
       console.log('🔔 Paystack webhook received:', {
         event: event.event,
         reference: event.data?.reference,

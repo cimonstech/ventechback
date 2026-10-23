@@ -312,9 +312,52 @@ const invalidateFeaturedProductsCache = () => {
   console.log('Featured products cache invalidated');
 };
 
+async function saveProductVariants(productId: string, variants: any[]) {
+  const { error: deleteMappingsError } = await supabaseAdmin
+    .from('product_attribute_mappings')
+    .delete()
+    .eq('product_id', productId);
+  if (deleteMappingsError) throw deleteMappingsError;
+
+  const { error: deleteOptionsError } = await supabaseAdmin
+    .from('product_selected_options')
+    .delete()
+    .eq('product_id', productId);
+  if (deleteOptionsError) throw deleteOptionsError;
+
+  if (variants.length === 0) return;
+
+  const mappings = variants.map((variant, index) => ({
+    product_id: productId,
+    attribute_id: variant.attribute_id,
+    is_required: variant.is_required,
+    display_order: index,
+  }));
+
+  const { error: mappingError } = await supabaseAdmin
+    .from('product_attribute_mappings')
+    .insert(mappings);
+  if (mappingError) throw mappingError;
+
+  const selectedOptions = variants.flatMap((variant) =>
+    (variant.selected_options || []).map((optionId: string) => ({
+      product_id: productId,
+      attribute_id: variant.attribute_id,
+      option_id: optionId,
+    }))
+  );
+
+  if (selectedOptions.length === 0) return;
+
+  const { error: optionsError } = await supabaseAdmin
+    .from('product_selected_options')
+    .insert(selectedOptions);
+  if (optionsError) throw optionsError;
+}
+
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
-    const productData = req.body;
+    const { variants, ...productData } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('products')
@@ -323,6 +366,10 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       .single();
 
     if (error) throw error;
+
+    if (Array.isArray(variants)) {
+      await saveProductVariants(data.id, variants);
+    }
 
     // Invalidate featured products cache if new product is featured
     if (productData.featured === true || productData.is_featured === true) {
@@ -340,7 +387,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const { variants, ...updates } = req.body;
 
     // ✅ Auto-sync in_stock flag with stock_quantity
     // If stock_quantity is being updated, automatically set in_stock
@@ -358,6 +405,10 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     if (error) throw error;
     if (!data) {
       return errorResponse(res, 'Product not found', 404);
+    }
+
+    if (Array.isArray(variants)) {
+      await saveProductVariants(Array.isArray(id) ? id[0] : id, variants);
     }
 
     // Invalidate featured products cache if featured status, stock status, or created_at changed
