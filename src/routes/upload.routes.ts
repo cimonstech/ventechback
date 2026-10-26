@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { uploadSingle, uploadMultiple } from '../middleware/upload.middleware';
+import { uploadFolder, uploadLimitMessage, uploadSingle, uploadMultiple } from '../middleware/upload.middleware';
 import { uploadToR2, uploadMultipleToR2, deleteFromR2, listR2Files } from '../services/r2.service';
 import { uploadRateLimiter } from '../middleware/rateLimit.middleware';
 import { requireAnyPermission } from '../middleware/auth.middleware';
@@ -25,8 +25,14 @@ router.post('/', requireAnyPermission(['products', 'content'], 'edit'), uploadRa
       });
     }
 
-    // Get folder from query params or body (default: 'uploads')
-    const folder = (req.query.folder as string) || (req.body.folder as string) || 'uploads';
+    const folder = uploadFolder(req);
+    const limitMessage = uploadLimitMessage(file, folder);
+    if (limitMessage) {
+      return res.status(400).json({
+        success: false,
+        error: limitMessage,
+      });
+    }
 
     // Upload to R2
     const result = await uploadToR2(file, folder);
@@ -65,8 +71,14 @@ router.post('/single', requireAnyPermission(['products', 'content'], 'edit'), up
       });
     }
 
-    // Get folder from query params (default: 'uploads')
-    const folder = (req.query.folder as string) || 'uploads';
+    const folder = uploadFolder(req);
+    const limitMessage = uploadLimitMessage(file, folder);
+    if (limitMessage) {
+      return res.status(400).json({
+        success: false,
+        error: limitMessage,
+      });
+    }
 
     // Upload to R2
     const result = await uploadToR2(file, folder);
@@ -107,8 +119,14 @@ router.post('/multiple', requireAnyPermission(['products', 'content'], 'edit'), 
       });
     }
 
-    // Get folder from query params (default: 'uploads')
-    const folder = (req.query.folder as string) || 'uploads';
+    const folder = uploadFolder(req);
+    const limitMessage = files.map((file) => uploadLimitMessage(file, folder)).find(Boolean);
+    if (limitMessage) {
+      return res.status(400).json({
+        success: false,
+        error: limitMessage,
+      });
+    }
 
     // Upload to R2
     const result = await uploadMultipleToR2(files, folder);

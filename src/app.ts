@@ -18,6 +18,8 @@ import couponRoutes from './routes/coupon.routes';
 import auditRoutes from './routes/audit.routes';
 import staffRoutes from './routes/staff.routes';
 import accessRoutes from './routes/access.routes';
+import contentRoutes from './routes/content.routes';
+import adminContentRoutes from './routes/adminContent.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 import { publicRateLimiter } from './middleware/rateLimit.middleware';
 
@@ -89,6 +91,8 @@ app.use('/api/contact', contactRoutes);
 app.use('/api/bulk-orders', bulkOrderRoutes);
 app.use('/api/affiliate', publicRateLimiter, affiliateRoutes);
 app.use('/api/coupons', publicRateLimiter, couponRoutes);
+app.use('/api/content', publicRateLimiter, contentRoutes);
+app.use('/api/admin/content', adminContentRoutes);
 app.use('/api/admin/audit-log', auditRoutes);
 app.use('/api/admin/staff', staffRoutes);
 app.use('/api/me', accessRoutes);
