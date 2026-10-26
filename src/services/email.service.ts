@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
+import { adminNotificationEmail, emailSubject } from '../config/email';
 
 interface EmailOptions {
   to: string;
@@ -50,10 +51,12 @@ class EmailService {
       // Use support email for customer-facing emails, noreply for automated notifications
       const fromEmail = useSupportEmail ? this.supportEmail : this.noreplyEmail;
 
+      const subject = emailSubject(options.subject);
+
       const { data, error } = await this.resend.emails.send({
         from: fromEmail,
         to: options.to,
-        subject: options.subject,
+        subject,
         html: options.html,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
@@ -66,7 +69,7 @@ class EmailService {
           details: (error as any)?.details,
           to: options.to,
           from: fromEmail,
-          subject: options.subject,
+          subject,
         });
         return false;
       }
@@ -303,7 +306,7 @@ class EmailService {
 
       // Use support email for investment requests (admin can reply)
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: `New Investment Request - ${fullName}`,
         html: html,
       }, true); // true = use support email
@@ -356,7 +359,7 @@ class EmailService {
 
       // Use support email for contact form submissions (admin can reply)
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: `Contact Form: ${subject} - ${name}`,
         html: html,
       }, true); // true = use support email
@@ -522,7 +525,7 @@ This bulk order request was submitted through the VENTECH website.
       const subject = `Bulk Order Request: ${productType} (${quantity}) - ${name}`;
       
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: subject,
         html: html,
         // Note: Resend doesn't support plain text in the current implementation,
@@ -648,7 +651,7 @@ This bulk order request was submitted through the VENTECH website.
 
       // Use support email for affiliate applications (admin can reply)
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: `New Affiliate Application: ${affiliateData.fullName} - ${affiliateData.promotionChannel}`,
         html: template,
       }, true); // true = use support email

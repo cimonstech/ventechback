@@ -8,6 +8,7 @@ import {
   verifyPaystackPayment,
 } from '../services/pricing.service';
 import enhancedEmailService from '../services/enhanced-email.service';
+import { adminNotificationEmail } from '../config/email';
 import pdfService from '../services/pdf.service';
 import { logAudit } from '../services/audit.service';
 
@@ -1062,7 +1063,7 @@ export class OrderController {
                           // Send email to admin
                           try {
                             const emailSent = await enhancedEmailService.sendEmail({
-                              to: 'ventechgadgets@gmail.com',
+                              to: adminNotificationEmail,
                               subject: `🚨 Product Out of Stock: ${updatedProduct.name}`,
                               html: `
                                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -1351,7 +1352,7 @@ export class OrderController {
 
       // Send admin notification email
       try {
-        console.log('📧 Sending admin order notification email to ventechgadgets@gmail.com');
+        console.log(`📧 Sending admin order notification email to ${adminNotificationEmail}`);
         const emailData = {
           ...orderData,
           customer_name: userData?.full_name || orderData.customer_bio?.name || shippingAddress?.recipient_name || 'Guest Customer',
@@ -1366,7 +1367,7 @@ export class OrderController {
 
         const adminEmailResult = await enhancedEmailService.sendAdminOrderNotification(emailData);
         if (adminEmailResult.success) {
-          console.log('✅ Admin order notification email sent successfully to ventechgadgets@gmail.com');
+          console.log(`✅ Admin order notification email sent successfully to ${adminNotificationEmail}`);
         } else {
           console.error('❌ Failed to send admin order notification email:', adminEmailResult.reason);
         }

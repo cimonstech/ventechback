@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { settingsService } from './settings.service';
+import { adminNotificationEmail, emailSubject } from '../config/email';
 
 interface EmailOptions {
   to: string;
@@ -108,10 +109,12 @@ class EnhancedEmailService {
       // Use support email for customer-facing emails, noreply for automated notifications
       const fromEmail = useSupportEmail ? this.supportEmail : this.noreplyEmail;
 
+      const subject = emailSubject(options.subject);
+
       const { data, error } = await this.resend.emails.send({
         from: fromEmail,
         to: options.to,
-        subject: options.subject,
+        subject,
         html: options.html,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
@@ -123,7 +126,7 @@ class EnhancedEmailService {
           code: (error as any)?.code,
           details: (error as any)?.details,
           to: options.to,
-          subject: options.subject,
+          subject,
           from: fromEmail,
         });
         return false;
@@ -663,9 +666,8 @@ class EnhancedEmailService {
       template = template.replace(/{{PRE_ORDER_INFO}}/g, preOrderInfo);
 
       // Use support email for admin notifications (they can reply)
-      // Send to ventechgadgets@gmail.com
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: `[${orderTypeTag}] New Order Received - ${orderData.order_number}`,
         html: template,
       }, true); // true = use support email
@@ -860,7 +862,7 @@ class EnhancedEmailService {
 
       // Use support email for investment requests (admin can reply)
       const success = await this.sendEmail({
-        to: 'ventechgadgets@gmail.com',
+        to: adminNotificationEmail,
         subject: `New Investment Request - ${fullName}`,
         html: html,
       }, true); // true = use support email
