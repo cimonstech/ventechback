@@ -5,6 +5,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
 import { sanitizeContentHtml } from '../services/sanitize.service';
+import { pathsForContentPage, revalidateContent } from '../services/revalidate.service';
 
 const ARTICLE_TYPES = [
   'user_guide',
@@ -247,7 +248,7 @@ export async function listArticles(req: AuthRequest, res: Response) {
 
     let query = supabaseAdmin
       .from('content_articles')
-      .select('id, type, title, slug, summary, status, sort_order, published_at, updated_at, created_at')
+      .select('id, type, title, slug, summary, status, sort_order, published_at, updated_at, created_at, targets:content_targets(target_type, target_id)')
       .order('updated_at', { ascending: false });
 
     if (type) query = query.eq('type', type);
@@ -547,6 +548,7 @@ export async function createFaqCategory(req: AuthRequest, res: Response) {
       after: auditCopy(data),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, data, 'FAQ category created', 201);
   } catch (error) {
     logDb('create faq category', error);
@@ -605,6 +607,7 @@ export async function updateFaqCategory(req: AuthRequest, res: Response) {
       after: auditCopy(data),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, data, 'FAQ category updated');
   } catch (error) {
     logDb('update faq category', error);
@@ -658,6 +661,7 @@ export async function deleteFaqCategory(req: AuthRequest, res: Response) {
       before: auditCopy(before),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, null, 'FAQ category deleted');
   } catch (error) {
     logDb('delete faq category', error);
@@ -669,7 +673,8 @@ async function reorderRows(
   req: AuthRequest,
   res: Response,
   table: 'faq_categories' | 'faqs',
-  entity: 'faq_category' | 'faq'
+  entity: 'faq_category' | 'faq',
+  paths: string[]
 ) {
   try {
     const body = parseBody(reorderSchema, req.body, res, 'Invalid order');
@@ -697,6 +702,7 @@ async function reorderRows(
       after: { items: body.items },
     });
 
+    await revalidateContent(paths);
     return successResponse(res, body.items, 'Order saved');
   } catch (error) {
     logDb(`reorder ${table}`, error);
@@ -705,7 +711,7 @@ async function reorderRows(
 }
 
 export function reorderFaqCategories(req: AuthRequest, res: Response) {
-  return reorderRows(req, res, 'faq_categories', 'faq_category');
+  return reorderRows(req, res, 'faq_categories', 'faq_category', ['/faq']);
 }
 
 export async function listFaqs(req: AuthRequest, res: Response) {
@@ -766,6 +772,7 @@ export async function createFaq(req: AuthRequest, res: Response) {
       after: auditCopy(data),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, data, 'FAQ created', 201);
   } catch (error) {
     logDb('create faq', error);
@@ -823,6 +830,7 @@ export async function updateFaq(req: AuthRequest, res: Response) {
       after: auditCopy(data),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, data, 'FAQ updated');
   } catch (error) {
     logDb('update faq', error);
@@ -863,6 +871,7 @@ export async function deleteFaq(req: AuthRequest, res: Response) {
       before: auditCopy(before),
     });
 
+    await revalidateContent(['/faq']);
     return successResponse(res, null, 'FAQ deleted');
   } catch (error) {
     logDb('delete faq', error);
@@ -871,7 +880,7 @@ export async function deleteFaq(req: AuthRequest, res: Response) {
 }
 
 export function reorderFaqs(req: AuthRequest, res: Response) {
-  return reorderRows(req, res, 'faqs', 'faq');
+  return reorderRows(req, res, 'faqs', 'faq', ['/faq']);
 }
 
 export async function listPages(_req: AuthRequest, res: Response) {
@@ -912,7 +921,24 @@ export async function getPage(req: AuthRequest, res: Response) {
     }
     if (!data) return errorResponse(res, 'Page not found', 404);
 
-    return successResponse(res, data);
+    let updatedByName: string | null = null;
+    if (data.updated_by) {
+      const { data: editor, error: editorError } = await supabaseAdmin
+        .from('users')
+        .select('full_name, first_name, last_name')
+        .eq('id', data.updated_by)
+        .maybeSingle();
+
+      if (editorError) {
+        logDb('get page editor', editorError);
+      } else if (editor) {
+        updatedByName = editor.full_name
+          || [editor.first_name, editor.last_name].filter(Boolean).join(' ')
+          || null;
+      }
+    }
+
+    return successResponse(res, { ...data, updated_by_name: updatedByName });
   } catch (error) {
     logDb('get page', error);
     return errorResponse(res, 'Failed to load page', 500);
@@ -968,6 +994,7 @@ export async function updatePage(req: AuthRequest, res: Response) {
       after: auditCopy(data),
     });
 
+    await revalidateContent(pathsForContentPage(slug));
     return successResponse(res, data, 'Page updated');
   } catch (error) {
     logDb('update page', error);
