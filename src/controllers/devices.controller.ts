@@ -91,6 +91,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
       return successResponse(res, {
         view: 'owner',
         ...toOwnerView(data, product, order, await currentOwner(req.user)),
+        qr_token: data.qr_token,
         guides,
       });
     }

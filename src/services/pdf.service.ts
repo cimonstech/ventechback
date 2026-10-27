@@ -94,6 +94,102 @@ class PDFService {
     });
   }
 
+  async generateVlbStatementPDF(input: {
+    investor_name: string;
+    investor_no: string;
+    plan_name: string;
+    principal_pesewas: number;
+    start_date: string;
+    maturity_date: string;
+    status: string;
+    payouts: Array<{
+      type: string;
+      term_no: number | null;
+      period_no: number;
+      due_date: string;
+      gross_pesewas: number;
+      scholar_pesewas: number;
+      net_pesewas: number;
+      status: string;
+      paid_at: string | null;
+      reference: string | null;
+    }>;
+    totals: {
+      paid_net_pesewas: number;
+      scholar_pesewas: number;
+      scheduled_net_pesewas: number;
+    };
+  }): Promise<Buffer> {
+    const ghs = (pesewas: number) => `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ margin: 48, size: 'A4' });
+      const buffers: Buffer[] = [];
+      doc.on('data', (chunk: Buffer) => buffers.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', reject);
+
+      doc.fontSize(20).fillColor('#1A1A1A').text('VENTECH Gadgets');
+      doc.moveDown(0.2);
+      doc.fontSize(14).fillColor('#FF7A19').text('Laptop Banking statement');
+      doc.moveDown();
+      doc.fontSize(11).fillColor('#3A3A3A');
+      const header = [
+        ['Investor', `${input.investor_name} (${input.investor_no})`],
+        ['Plan', input.plan_name],
+        ['Principal', ghs(input.principal_pesewas)],
+        ['Start', input.start_date],
+        ['Maturity', input.maturity_date],
+        ['Status', input.status],
+      ];
+      for (const [label, value] of header) {
+        doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
+        doc.font('Helvetica').text(value);
+        doc.moveDown(0.3);
+      }
+
+      doc.moveDown(0.6);
+      doc.font('Helvetica-Bold').fontSize(12).fillColor('#1A1A1A').text('Schedule');
+      doc.moveDown(0.4);
+      doc.font('Helvetica').fontSize(9).fillColor('#3A3A3A');
+
+      const col = { due: 48, type: 118, period: 178, gross: 230, scholar: 300, net: 370, status: 440 };
+      const drawRow = (row: string[], bold = false) => {
+        if (doc.y > 760) doc.addPage();
+        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica');
+        doc.text(row[0], col.due, doc.y, { width: 66, continued: false });
+        const y = doc.y - doc.currentLineHeight();
+        doc.text(row[1], col.type, y, { width: 56 });
+        doc.text(row[2], col.period, y, { width: 48 });
+        doc.text(row[3], col.gross, y, { width: 66 });
+        doc.text(row[4], col.scholar, y, { width: 66 });
+        doc.text(row[5], col.net, y, { width: 66 });
+        doc.text(row[6], col.status, y, { width: 90 });
+        doc.moveDown(0.55);
+      };
+
+      drawRow(['Due', 'Type', 'Period', 'Gross', 'Scholar', 'Net', 'Status'], true);
+      for (const payout of input.payouts) {
+        drawRow([
+          payout.due_date,
+          payout.type,
+          String(payout.period_no),
+          ghs(payout.gross_pesewas),
+          ghs(payout.scholar_pesewas),
+          ghs(payout.net_pesewas),
+          payout.status,
+        ]);
+      }
+
+      if (doc.y > 720) doc.addPage();
+      doc.moveDown();
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#1A1A1A');
+      doc.text(`Paid so far (net): ${ghs(input.totals.paid_net_pesewas)}`);
+      doc.text(`Scholar Fund deducted: ${ghs(input.totals.scholar_pesewas)}`);
+      doc.text(`Remaining scheduled (net): ${ghs(input.totals.scheduled_net_pesewas)}`);
+      doc.end();
+    });
+  }
+
   async generateOrderPDF(orderData: OrderData): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {

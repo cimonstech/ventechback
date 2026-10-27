@@ -1,10 +1,10 @@
 import { Router, Request, Response } from 'express';
-import { sendInvestmentEmail } from '../services/email.service';
 import { contactRateLimiter } from '../middleware/rateLimit.middleware';
+import { submitLegacyInvestment } from '../services/vlb.service';
 
 const router = Router();
 
-// POST /api/investment - Submit investment form
+// POST /api/investment - Submit investment form (also stores a vlb_applications row)
 router.post('/', contactRateLimiter, async (req: Request, res: Response) => {
   try {
     const { fullName, email, phone, tier, amount, plan, message } = req.body;
@@ -26,8 +26,7 @@ router.post('/', contactRateLimiter, async (req: Request, res: Response) => {
       });
     }
 
-    // Send email
-    const result = await sendInvestmentEmail({
+    const result = await submitLegacyInvestment({
       fullName,
       email,
       phone,
