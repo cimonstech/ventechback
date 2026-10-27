@@ -15,7 +15,7 @@ export const TICKET_STATUSES = [
 
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
-const OPEN_STATUSES: TicketStatus[] = [
+export const OPEN_STATUSES: TicketStatus[] = [
   'submitted',
   'under_review',
   'diagnosing',
