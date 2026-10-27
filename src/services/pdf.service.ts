@@ -54,6 +54,46 @@ interface OrderData {
 class PDFService {
   private currentY: number = 0; // Track current Y position across methods
 
+  async generateTicketReceiptPDF(input: {
+    ticket_no: string;
+    laptop_model: string;
+    amount: number;
+    method: string;
+    reference: string | null;
+    paid_at: string;
+    phone: string;
+    email: string;
+  }): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ margin: 48, size: 'A4' });
+      const buffers: Buffer[] = [];
+      doc.on('data', (chunk: Buffer) => buffers.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', reject);
+
+      doc.fontSize(20).fillColor('#1A1A1A').text('VENTECH Gadgets', { align: 'left' });
+      doc.moveDown(0.3);
+      doc.fontSize(14).text('Service payment receipt');
+      doc.moveDown();
+      doc.fontSize(11).fillColor('#3A3A3A');
+      const lines = [
+        ['Ticket', input.ticket_no],
+        ['Laptop', input.laptop_model],
+        ['Amount', `GHS ${Number(input.amount).toFixed(2)}`],
+        ['Method', input.method],
+        ['Reference', input.reference || '—'],
+        ['Date', new Date(input.paid_at).toLocaleString('en-GB')],
+        ['Contact', `${input.email} · ${input.phone}`],
+      ];
+      for (const [label, value] of lines) {
+        doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
+        doc.font('Helvetica').text(value);
+        doc.moveDown(0.4);
+      }
+      doc.end();
+    });
+  }
+
   async generateOrderPDF(orderData: OrderData): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {

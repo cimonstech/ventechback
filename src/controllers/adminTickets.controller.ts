@@ -6,15 +6,23 @@ import { warrantyStatus } from '../services/device.service';
 import {
   cleanupOrphanUploads,
   displayName,
+  emailPaymentReceipt,
   emailStaffReply,
   emailStatusChanged,
+  formatTicketGhs,
+  insertTicketEvent,
+  PAYMENT_METHOD_LABEL,
+  PAYMENT_METHODS,
+  presentRepairReceipt,
   signedMedia,
   statusMove,
+  storeContact,
   STATUS_LABEL,
   TICKET_STATUSES,
   TicketStatus,
   userEmail,
 } from '../services/ticket.service';
+import pdfService from '../services/pdf.service';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, paginatedResponse, successResponse } from '../utils/responseHandlers';
 
@@ -38,8 +46,17 @@ const patchSchema = z.object({
   is_warranty: z.boolean().nullable().optional(),
   resolution: z.string().trim().max(5000).nullable().optional(),
   repair_cost: z.number().min(0).max(99999999.99).nullable().optional(),
-  repair_paid: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update' });
+
+const paymentSchema = z.object({
+  amount: z.number().min(0).max(99999999.99),
+  method: z.enum(PAYMENT_METHODS),
+  reference: z.string().trim().max(120).optional(),
+}).superRefine((value, ctx) => {
+  if (value.method !== 'cash' && !value.reference) {
+    ctx.addIssue({ code: 'custom', message: 'A reference is required for this payment method.', path: ['reference'] });
+  }
+});
 
 const issueSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -620,11 +637,14 @@ export async function updateTicket(req: AuthRequest, res: Response) {
       ? before.resolution
       : (parsed.data.resolution?.trim() || null);
     const resolutionChanged = parsed.data.resolution !== undefined && nextResolution !== (before.resolution || null);
+    const warrantyChanged = parsed.data.is_warranty !== undefined && parsed.data.is_warranty !== before.is_warranty;
+    const nextCost = parsed.data.repair_cost;
+    const beforeCost = before.repair_cost === null || before.repair_cost === undefined ? null : Number(before.repair_cost);
+    const costChanged = nextCost !== undefined && nextCost !== beforeCost;
     const update: Record<string, unknown> = { last_staff_activity_at: new Date().toISOString() };
     if (parsed.data.is_warranty !== undefined) update.is_warranty = parsed.data.is_warranty;
     if (parsed.data.resolution !== undefined) update.resolution = nextResolution;
     if (parsed.data.repair_cost !== undefined) update.repair_cost = parsed.data.repair_cost;
-    if (parsed.data.repair_paid !== undefined) update.repair_paid = parsed.data.repair_paid;
 
     const { data, error: updateError } = await supabaseAdmin
       .from('service_tickets')
@@ -636,16 +656,38 @@ export async function updateTicket(req: AuthRequest, res: Response) {
       logDb('ticket update', updateError);
       return errorResponse(res, 'Could not update this ticket', 500);
     }
+    const actor = { actor_id: req.user?.id ?? null, actor_role: req.user?.role ?? null };
+    const events: Array<{ type: string; body: string | null; is_internal: boolean }> = [];
+    if (warrantyChanged && typeof parsed.data.is_warranty === 'boolean') {
+      events.push({
+        type: 'warranty',
+        body: parsed.data.is_warranty ? 'Marked as warranty job' : 'Marked as not a warranty job',
+        is_internal: true,
+      });
+    }
+    if (costChanged && typeof nextCost === 'number') {
+      events.push({
+        type: 'repair_cost',
+        body: `Repair cost set to ${formatTicketGhs(nextCost)}`,
+        is_internal: true,
+      });
+    }
     if (resolutionChanged) {
-      const { error: eventError } = await supabaseAdmin.from('ticket_events').insert({
-        ticket_id: id,
+      events.push({
         type: 'resolution',
         body: nextResolution,
         is_internal: false,
-        actor_id: req.user?.id ?? null,
-        actor_role: req.user?.role ?? null,
       });
-      if (eventError) logDb('ticket resolution event', eventError);
+    }
+    for (const event of events) {
+      const wrote = await insertTicketEvent({
+        ticket_id: id,
+        type: event.type,
+        body: event.body,
+        is_internal: event.is_internal,
+        ...actor,
+      });
+      if (!wrote) return errorResponse(res, 'Could not update this ticket', 500);
     }
     await logAudit({
       req,
@@ -656,7 +698,6 @@ export async function updateTicket(req: AuthRequest, res: Response) {
         is_warranty: before.is_warranty,
         resolution: before.resolution,
         repair_cost: before.repair_cost,
-        repair_paid: before.repair_paid,
       },
       after: data,
     });
@@ -664,6 +705,140 @@ export async function updateTicket(req: AuthRequest, res: Response) {
   } catch (error) {
     logDb('ticket update', error);
     return errorResponse(res, 'Could not update this ticket', 500);
+  }
+}
+
+export async function recordTicketPayment(req: AuthRequest, res: Response) {
+  try {
+    const id = param(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Ticket not found.', 404);
+    const parsed = paymentSchema.safeParse(req.body);
+    if (!parsed.success) return errorResponse(res, parsed.error.issues[0]?.message || 'Check the payment details.', 400);
+
+    const { data: ticket, error } = await supabaseAdmin
+      .from('service_tickets')
+      .select('id, ticket_no, laptop_model, user_id, repair_paid, repair_paid_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) {
+      logDb('ticket payment lookup', error);
+      return errorResponse(res, 'Could not record this payment', 500);
+    }
+    if (!ticket) return errorResponse(res, 'Ticket not found.', 404);
+    if (ticket.repair_paid || ticket.repair_paid_at) {
+      return errorResponse(res, 'Payment has already been recorded.', 409);
+    }
+
+    const now = new Date().toISOString();
+    const reference = parsed.data.method === 'cash' ? (parsed.data.reference || null) : parsed.data.reference || null;
+    const { data, error: updateError } = await supabaseAdmin
+      .from('service_tickets')
+      .update({
+        repair_paid: true,
+        repair_paid_amount: parsed.data.amount,
+        repair_paid_method: parsed.data.method,
+        repair_paid_reference: reference,
+        repair_paid_at: now,
+        repair_paid_by: req.user?.id ?? null,
+        last_staff_activity_at: now,
+      })
+      .eq('id', id)
+      .eq('repair_paid', false)
+      .select('id, ticket_no, laptop_model, repair_paid, repair_paid_amount, repair_paid_method, repair_paid_reference, repair_paid_at')
+      .maybeSingle();
+    if (updateError) {
+      logDb('ticket payment update', updateError);
+      return errorResponse(res, 'Could not record this payment', 500);
+    }
+    if (!data) return errorResponse(res, 'Payment has already been recorded.', 409);
+
+    const methodLabel = PAYMENT_METHOD_LABEL[parsed.data.method];
+    const body = `Payment received: ${formatTicketGhs(parsed.data.amount)} by ${methodLabel}`;
+    const wrote = await insertTicketEvent({
+      ticket_id: id,
+      type: 'payment',
+      body,
+      is_internal: false,
+      actor_id: req.user?.id ?? null,
+      actor_role: req.user?.role ?? null,
+    });
+    if (!wrote) {
+      await supabaseAdmin.from('service_tickets').update({
+        repair_paid: false,
+        repair_paid_amount: null,
+        repair_paid_method: null,
+        repair_paid_reference: null,
+        repair_paid_at: null,
+        repair_paid_by: null,
+      }).eq('id', id);
+      return errorResponse(res, 'Could not record this payment', 500);
+    }
+
+    await emailPaymentReceipt({
+      to: await userEmail(ticket.user_id),
+      ticketNo: ticket.ticket_no,
+      laptop: ticket.laptop_model,
+      amount: parsed.data.amount,
+      method: parsed.data.method,
+      reference,
+      paidAt: now,
+    });
+    await logAudit({
+      req,
+      entity: 'service_ticket',
+      entityId: id,
+      action: 'payment',
+      after: {
+        amount: parsed.data.amount,
+        method: parsed.data.method,
+        reference,
+        paid_at: now,
+      },
+    });
+    return successResponse(res, data, 'Payment recorded.');
+  } catch (error) {
+    logDb('ticket payment', error);
+    return errorResponse(res, 'Could not record this payment', 500);
+  }
+}
+
+export async function getTicketReceipt(req: AuthRequest, res: Response) {
+  try {
+    const id = param(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Ticket not found.', 404);
+    const { data: ticket, error } = await supabaseAdmin
+      .from('service_tickets')
+      .select('ticket_no, laptop_model, repair_paid, repair_paid_amount, repair_paid_method, repair_paid_reference, repair_paid_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) {
+      logDb('ticket receipt', error);
+      return errorResponse(res, 'Could not load this receipt', 500);
+    }
+    if (!ticket) return errorResponse(res, 'Ticket not found.', 404);
+    if (!ticket.repair_paid || !ticket.repair_paid_at) return errorResponse(res, 'No receipt for this ticket.', 404);
+
+    const contact = await storeContact();
+    const payload = presentRepairReceipt(ticket, contact);
+    if (String(req.query.format || '') === 'pdf') {
+      const pdf = await pdfService.generateTicketReceiptPDF({
+        ticket_no: payload.ticket_no,
+        laptop_model: payload.laptop_model,
+        amount: payload.amount || 0,
+        method: payload.method_label || payload.method || '',
+        reference: payload.reference,
+        paid_at: payload.paid_at || new Date().toISOString(),
+        phone: contact.phone,
+        email: contact.email,
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${ticket.ticket_no}-receipt.pdf"`);
+      return res.status(200).send(pdf);
+    }
+    return successResponse(res, payload);
+  } catch (error) {
+    logDb('ticket receipt', error);
+    return errorResponse(res, 'Could not load this receipt', 500);
   }
 }
 

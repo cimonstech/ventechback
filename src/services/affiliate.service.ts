@@ -344,7 +344,6 @@ export async function registerAffiliate(req: AuthRequest, input: RegisterInput):
     bank_name: input.payout_method === 'bank' ? input.bank_name || null : null,
     bank_account_name: input.payout_method === 'bank' ? input.bank_account_name || null : null,
     bank_account_number: input.payout_method === 'bank' ? input.bank_account_number || null : null,
-    payout_details_changed_at: now,
     terms_version: terms.version,
     terms_accepted_at: now,
   };
@@ -442,6 +441,9 @@ export async function initializeAffiliateFee(req: AuthRequest) {
   const affiliate = await loadAffiliateByUser(userId);
   if (!affiliate) throw new AffiliateError(404, 'Affiliate application not found.');
   if (affiliate.user_id !== userId) throw new AffiliateError(404, 'Affiliate application not found.');
+  if (!affiliate.terms_accepted_at) {
+    throw new AffiliateError(400, 'Please accept the affiliate terms first.');
+  }
   if (affiliate.status !== 'awaiting_payment') {
     throw new AffiliateError(400, 'This application is not waiting for a fee payment.');
   }
@@ -477,6 +479,14 @@ export async function initializeAffiliateFee(req: AuthRequest) {
       purpose: 'affiliate_fee',
       affiliate_id: affiliate.id,
     },
+  });
+
+  await logAudit({
+    req,
+    entity: 'affiliate',
+    entityId: affiliate.id,
+    action: 'fee_initialize',
+    after: { reference: paystack.reference || reference, amount_pesewas: amount },
   });
 
   return {

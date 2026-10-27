@@ -166,6 +166,112 @@ export async function emailStaffReply(to: string, ticketNo: string, body: string
   await sendTicketEmail(to, heading, emailShell(heading, `<p>${escapeHtml(body)}</p>`));
 }
 
+export const PAYMENT_METHODS = ['cash', 'momo', 'card', 'bank_transfer'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  cash: 'cash',
+  momo: 'MoMo',
+  card: 'card',
+  bank_transfer: 'bank transfer',
+};
+
+export function formatTicketGhs(amount: number): string {
+  return `GHS ${Number(amount).toFixed(2)}`;
+}
+
+export async function insertTicketEvent(input: {
+  ticket_id: string;
+  type: string;
+  body: string | null;
+  is_internal: boolean;
+  actor_id: string | null;
+  actor_role: string | null;
+}): Promise<boolean> {
+  const { error } = await supabaseAdmin.from('ticket_events').insert(input);
+  if (error) {
+    console.error('ticket event', error);
+    return false;
+  }
+  return true;
+}
+
+export async function storeContact(): Promise<{ phone: string; email: string }> {
+  const fallback = { phone: '+233 55 134 4310', email: 'ventechgadgets@gmail.com' };
+  const { data, error } = await supabaseAdmin
+    .from('settings')
+    .select('key, value')
+    .in('key', ['store_phone', 'store_email']);
+  if (error) {
+    console.error('ticket store contact', error);
+    return fallback;
+  }
+  const phone = data?.find((row) => row.key === 'store_phone')?.value;
+  const email = data?.find((row) => row.key === 'store_email')?.value;
+  return {
+    phone: (typeof phone === 'string' && phone.trim()) || fallback.phone,
+    email: (typeof email === 'string' && email.trim()) || fallback.email,
+  };
+}
+
+export function presentRepairReceipt(
+  ticket: {
+    ticket_no: string;
+    laptop_model: string;
+    repair_paid_amount: number | string | null;
+    repair_paid_method: string | null;
+    repair_paid_reference: string | null;
+    repair_paid_at: string | null;
+  },
+  contact: { phone: string; email: string }
+) {
+  const method = ticket.repair_paid_method;
+  return {
+    ticket_no: ticket.ticket_no,
+    laptop_model: ticket.laptop_model,
+    amount: ticket.repair_paid_amount === null || ticket.repair_paid_amount === undefined
+      ? null
+      : Number(ticket.repair_paid_amount),
+    method,
+    method_label: method && method in PAYMENT_METHOD_LABEL
+      ? PAYMENT_METHOD_LABEL[method as PaymentMethod]
+      : method,
+    reference: ticket.repair_paid_reference,
+    paid_at: ticket.repair_paid_at,
+    contact,
+  };
+}
+
+export async function emailPaymentReceipt(input: {
+  to: string;
+  ticketNo: string;
+  laptop: string;
+  amount: number;
+  method: PaymentMethod;
+  reference: string | null;
+  paidAt: string;
+}): Promise<void> {
+  const contact = await storeContact();
+  const heading = `Payment receipt for ${input.ticketNo}`;
+  const rows = [
+    ['Ticket', input.ticketNo],
+    ['Laptop', input.laptop],
+    ['Amount', formatTicketGhs(input.amount)],
+    ['Method', PAYMENT_METHOD_LABEL[input.method]],
+    ['Reference', input.reference || '—'],
+    ['Date', new Date(input.paidAt).toLocaleString('en-GB')],
+    ['Contact', `${contact.email} · ${contact.phone}`],
+  ];
+  const body = `<p>We received your payment.</p>
+    <table style="border-collapse:collapse;width:100%;margin-top:16px;">
+      ${rows.map(([label, value]) => `<tr>
+        <td style="padding:6px 0;color:#3A3A3A;width:120px;">${escapeHtml(label)}</td>
+        <td style="padding:6px 0;font-weight:600;">${escapeHtml(value)}</td>
+      </tr>`).join('')}
+    </table>`;
+  await sendTicketEmail(input.to, heading, emailShell(heading, body));
+}
+
 export async function emailCustomerMessage(input: {
   ticketId: string;
   ticketNo: string;

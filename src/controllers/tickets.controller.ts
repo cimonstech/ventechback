@@ -6,11 +6,14 @@ import { logAudit } from '../services/audit.service';
 import { warrantyStatus } from '../services/device.service';
 import { deletePrivateObject, getSignedViewUrl, putPrivateObject } from '../services/privateStorage.service';
 import { detectTicketFile, uploadKind } from '../services/ticketFiles';
+import pdfService from '../services/pdf.service';
 import {
   emailAdminNewTicket,
   emailCustomerMessage,
   emailTicketReceived,
+  presentRepairReceipt,
   signedMedia,
+  storeContact,
 } from '../services/ticket.service';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
@@ -415,7 +418,8 @@ export async function getMine(req: AuthRequest, res: Response) {
       .select(`
         id, ticket_no, status, laptop_model, serial_number, description, date_started,
         contact_name, contact_phone, warranty_status_at_submit, is_warranty,
-        resolution, repair_cost, repair_paid, order_number_text, created_at, updated_at,
+        resolution, repair_cost, repair_paid, repair_paid_amount, repair_paid_method,
+        repair_paid_reference, repair_paid_at, order_number_text, created_at, updated_at,
         completed_at, closed_reason,
         issue_type:ticket_issue_types!service_tickets_issue_type_id_fkey(id, name),
         order:orders!service_tickets_order_id_fkey(order_number),
@@ -460,6 +464,10 @@ export async function getMine(req: AuthRequest, res: Response) {
       resolution: data.resolution,
       repair_cost: data.repair_cost,
       repair_paid: data.repair_paid,
+      repair_paid_amount: data.repair_paid_amount,
+      repair_paid_method: data.repair_paid_method,
+      repair_paid_reference: data.repair_paid_reference,
+      repair_paid_at: data.repair_paid_at,
       order_number: order?.order_number || data.order_number_text,
       created_at: data.created_at,
       updated_at: data.updated_at,
@@ -471,6 +479,48 @@ export async function getMine(req: AuthRequest, res: Response) {
   } catch (error) {
     logDb('get my ticket', error);
     return errorResponse(res, 'Could not load this request', 500);
+  }
+}
+
+export async function getMineReceipt(req: AuthRequest, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return errorResponse(res, 'Unauthorized', 401);
+    const ticketNo = param(req.params.ticketNo).trim();
+    const { data, error } = await supabaseAdmin
+      .from('service_tickets')
+      .select('ticket_no, laptop_model, repair_paid, repair_paid_amount, repair_paid_method, repair_paid_reference, repair_paid_at')
+      .eq('user_id', userId)
+      .eq('ticket_no', ticketNo)
+      .maybeSingle();
+    if (error) {
+      logDb('my ticket receipt', error);
+      return errorResponse(res, 'Could not load this receipt', 500);
+    }
+    if (!data) return errorResponse(res, 'Ticket not found.', 404);
+    if (!data.repair_paid || !data.repair_paid_at) return errorResponse(res, 'No receipt for this ticket.', 404);
+
+    const contact = await storeContact();
+    const payload = presentRepairReceipt(data, contact);
+    if (String(req.query.format || '') === 'pdf') {
+      const pdf = await pdfService.generateTicketReceiptPDF({
+        ticket_no: payload.ticket_no,
+        laptop_model: payload.laptop_model,
+        amount: payload.amount || 0,
+        method: payload.method_label || payload.method || '',
+        reference: payload.reference,
+        paid_at: payload.paid_at || new Date().toISOString(),
+        phone: contact.phone,
+        email: contact.email,
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${data.ticket_no}-receipt.pdf"`);
+      return res.status(200).send(pdf);
+    }
+    return successResponse(res, payload);
+  } catch (error) {
+    logDb('my ticket receipt', error);
+    return errorResponse(res, 'Could not load this receipt', 500);
   }
 }
 

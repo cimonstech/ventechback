@@ -296,8 +296,26 @@ export async function getWithdrawals(userId: string, page: number, limit: number
   return { rows: data || [], total: count || 0 };
 }
 
+function sameText(left: unknown, right: unknown): boolean {
+  return (typeof left === 'string' ? left : '') === (typeof right === 'string' ? right : '');
+}
+
+function payoutFieldsChanged(row: AffiliateRow, input: PayoutInput): boolean {
+  if (input.payout_method !== row.payout_method) return true;
+  if (input.payout_method === 'momo') {
+    return !sameText(row.momo_network, input.momo_network) || !sameText(row.momo_number, input.momo_number);
+  }
+  return (
+    !sameText(row.bank_name, input.bank_name)
+    || !sameText(row.bank_account_name, input.bank_account_name)
+    || !sameText(row.bank_account_number, input.bank_account_number)
+  );
+}
+
 export async function updatePayout(req: AuditReq, userId: string, input: PayoutInput) {
   const row = await ownAffiliate(userId);
+  const changed = payoutFieldsChanged(row, input);
+  if (!changed) return presentPayout(row, true);
   const now = new Date().toISOString();
   const patch =
     input.payout_method === 'momo'

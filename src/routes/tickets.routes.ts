@@ -8,6 +8,7 @@ import {
   createUpload,
   deleteUpload,
   getMine,
+  getMineReceipt,
   listIssueTypes,
   listMine,
   postMessage,
@@ -33,6 +34,7 @@ router.get('/issue-types', listIssueTypes);
 router.post('/uploads', authenticate, uploadRateLimiter, acceptTicketFile, createUpload);
 router.delete('/uploads/:id', authenticate, deleteUpload);
 router.get('/mine', authenticate, listMine);
+router.get('/mine/:ticketNo/receipt', authenticate, getMineReceipt);
 router.get('/mine/:ticketNo', authenticate, getMine);
 router.post('/mine/:ticketNo/messages', authenticate, postMessage);
 router.post('/', authenticate, ticketCreateRateLimiter, createTicket);
