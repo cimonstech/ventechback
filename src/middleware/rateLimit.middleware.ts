@@ -164,3 +164,25 @@ export const deviceClaimRateLimiter = rateLimit({
   keyGenerator: getIdentifier,
 });
 
+/**
+ * Service ticket creation
+ * - Runs after authenticate so the key is the user id
+ * - 5 tickets per user per day
+ */
+export const ticketCreateRateLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    const identifier = getIdentifier(req);
+    console.warn(`Rate limit exceeded for ${identifier} on ${req.path}`);
+    res.status(429).json({
+      success: false,
+      message: 'You can only submit 5 service requests per day.',
+      retryAfter: Math.ceil((req as any).rateLimit.resetTime / 1000),
+    });
+  },
+  keyGenerator: getIdentifier,
+});
+

@@ -33,6 +33,9 @@ module.exports = {
         R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
         R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
         R2_PUBLIC_URL: process.env.R2_PUBLIC_URL,
+        R2_PRIVATE_BUCKET_NAME: process.env.R2_PRIVATE_BUCKET_NAME,
+        R2_PRIVATE_ACCESS_KEY_ID: process.env.R2_PRIVATE_ACCESS_KEY_ID,
+        R2_PRIVATE_SECRET_ACCESS_KEY: process.env.R2_PRIVATE_SECRET_ACCESS_KEY,
         PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
         PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY
       },
@@ -62,6 +65,9 @@ module.exports = {
         R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
         R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
         R2_PUBLIC_URL: process.env.R2_PUBLIC_URL,
+        R2_PRIVATE_BUCKET_NAME: process.env.R2_PRIVATE_BUCKET_NAME,
+        R2_PRIVATE_ACCESS_KEY_ID: process.env.R2_PRIVATE_ACCESS_KEY_ID,
+        R2_PRIVATE_SECRET_ACCESS_KEY: process.env.R2_PRIVATE_SECRET_ACCESS_KEY,
         PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
         PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY
       }
