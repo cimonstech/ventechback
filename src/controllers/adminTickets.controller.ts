@@ -147,7 +147,7 @@ export async function listTickets(req: AuthRequest, res: Response) {
     const to = queryValue(req.query.to);
     const term = searchTerm(queryValue(req.query.search));
 
-    if (status && !TICKET_STATUSES.includes(status as TicketStatus)) {
+    if (status && status !== 'open' && status !== 'done' && !TICKET_STATUSES.includes(status as TicketStatus)) {
       return errorResponse(res, 'That status is not available.', 400);
     }
     if (issueTypeId && !z.uuid().safeParse(issueTypeId).success) {
@@ -181,7 +181,11 @@ export async function listTickets(req: AuthRequest, res: Response) {
       .from('service_tickets')
       .select(LIST_SELECT, { count: 'exact' })
       .order('created_at', { ascending: false });
-    if (status) query = query.eq('status', status);
+    if (status === 'open') {
+      query = query.in('status', ['submitted', 'under_review', 'diagnosing', 'repair_resolution', 'ready']);
+    } else if (status === 'done') {
+      query = query.in('status', ['completed', 'closed']);
+    } else if (status) query = query.eq('status', status);
     if (issueTypeId) query = query.eq('issue_type_id', issueTypeId);
     if (assignedTo === 'unassigned') query = query.is('assigned_to', null);
     else if (assignedTo) query = query.eq('assigned_to', assignedTo);
