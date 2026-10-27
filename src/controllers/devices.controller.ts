@@ -15,7 +15,7 @@ import {
 } from '../services/device.service';
 
 const PUBLIC_SELECT = `
-  id, user_id, product_id, order_id, customer_name, customer_email,
+  id, qr_token, user_id, product_id, order_id, customer_name, customer_email,
   model_name, serial_number, purchase_date, warranty_months, warranty_start, status,
   product:products!devices_product_id_fkey(slug, thumbnail),
   order:orders!devices_order_id_fkey(id, order_number)
@@ -266,7 +266,10 @@ export async function listMine(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to load your laptops', 500);
     }
 
-    const devices = (data || []).map((row) => toOwnerView(row, one(row.product), one(row.order)));
+    const devices = (data || []).map((row) => ({
+      ...toOwnerView(row, one(row.product), one(row.order)),
+      qr_token: row.qr_token,
+    }));
     return successResponse(res, devices);
   } catch (error) {
     logDb('list my devices', error);
