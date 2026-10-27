@@ -4,6 +4,8 @@ import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { PricingError, priceOrder } from '../services/pricing.service';
+import { AffiliateError, applyAffiliateFeePaid } from '../services/affiliate.service';
+import { maybeCreateCommissionForPayment } from '../services/affiliateCommission.service';
 
 export class PaymentController {
   // Initialize Paystack transaction (from backend as per Paystack best practices)
@@ -35,6 +37,10 @@ export class PaymentController {
           success: false,
           message: 'Paystack secret key not configured',
         });
+      }
+
+      if (checkout && !checkout.referral && (metadata.referral || req.body.referral)) {
+        checkout.referral = metadata.referral || req.body.referral;
       }
 
       const userId = req.user?.id ?? null;
@@ -403,11 +409,39 @@ export class PaymentController {
       console.log('Paystack webhook signature verified');
 
       const event = JSON.parse(rawBody.toString('utf8'));
+      if (event.data && typeof event.data.metadata === 'string') {
+        try {
+          event.data.metadata = JSON.parse(event.data.metadata);
+        } catch {
+          event.data.metadata = {};
+        }
+      }
       console.log('🔔 Paystack webhook received:', {
         event: event.event,
         reference: event.data?.reference,
         status: event.data?.status,
       });
+
+      const webhookPurpose = event.data?.metadata?.purpose;
+      if (
+        (event.event === 'charge.success' || event.event === 'transaction.success') &&
+        webhookPurpose === 'affiliate_fee'
+      ) {
+        try {
+          await applyAffiliateFeePaid(req, event.data.reference);
+        } catch (feeError) {
+          if (feeError instanceof AffiliateError && feeError.statusCode < 500) {
+            console.error('affiliate fee webhook', feeError.message);
+            return res.status(200).json({ success: true, message: 'Webhook processed' });
+          }
+          console.error('affiliate fee webhook', feeError);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to process webhook',
+          });
+        }
+        return res.status(200).json({ success: true, message: 'Webhook processed' });
+      }
 
       // Handle payment.success event
       if (event.event === 'charge.success' || event.event === 'transaction.success') {
@@ -452,6 +486,7 @@ export class PaymentController {
             delivery_address: checkoutData.delivery_address,
             customer_bio: checkoutData.customer_bio || null,
             coupon_id: checkoutData.coupon_id || null,
+            referral: checkoutData.referral || null,
           };
 
           const orderBodies: any[] = [];
@@ -511,6 +546,8 @@ export class PaymentController {
               console.log(`✅ Webhook order ok: ${payload?.data?.order_number} (${payload?.message})`);
             }
           });
+
+          await maybeCreateCommissionForPayment(req, transaction.reference);
 
           // 5xx asks Paystack to retry later; anything else is final
           const retry = results.some(({ status }) => status >= 500);

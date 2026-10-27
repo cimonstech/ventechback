@@ -186,3 +186,22 @@ export const ticketCreateRateLimiter = rateLimit({
   keyGenerator: getIdentifier,
 });
 
+/**
+ * Public referral click tracking
+ * - 40 requests per minute per IP
+ */
+export const refClickRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: standardHandler,
+  keyGenerator: (req: Request) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = forwarded
+      ? (typeof forwarded === 'string' ? forwarded.split(',')[0] : forwarded[0])
+      : req.ip || req.socket.remoteAddress || 'unknown';
+    return `ip:${String(ip).trim()}`;
+  },
+});
+

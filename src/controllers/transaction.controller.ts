@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from '../services/audit.service';
+import { maybeReverseCommissionForTransaction } from '../services/affiliateCommission.service';
 
 export class TransactionController {
   // Get all transactions (admin)
@@ -148,6 +149,12 @@ export class TransactionController {
       }
 
       console.log(`✅ Transaction ${transaction.transaction_reference || id} refunded successfully`);
+
+      try {
+        await maybeReverseCommissionForTransaction(req, transaction);
+      } catch (commissionError) {
+        console.error('affiliate commission reverse after refund', commissionError);
+      }
 
       await logAudit({
         req,

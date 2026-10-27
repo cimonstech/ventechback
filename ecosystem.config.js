@@ -37,7 +37,8 @@ module.exports = {
         R2_PRIVATE_ACCESS_KEY_ID: process.env.R2_PRIVATE_ACCESS_KEY_ID,
         R2_PRIVATE_SECRET_ACCESS_KEY: process.env.R2_PRIVATE_SECRET_ACCESS_KEY,
         PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
-        PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY
+        PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY,
+        AFFILIATE_IP_SALT: process.env.AFFILIATE_IP_SALT
       },
       env_production: {
         NODE_ENV: "production",
@@ -69,7 +70,8 @@ module.exports = {
         R2_PRIVATE_ACCESS_KEY_ID: process.env.R2_PRIVATE_ACCESS_KEY_ID,
         R2_PRIVATE_SECRET_ACCESS_KEY: process.env.R2_PRIVATE_SECRET_ACCESS_KEY,
         PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
-        PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY
+        PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY,
+        AFFILIATE_IP_SALT: process.env.AFFILIATE_IP_SALT
       }
     }
   ]
