@@ -1237,8 +1237,8 @@ export class OrderController {
           payment_provider: payment_method === 'paystack' ? 'paystack' : payment_method === 'cash_on_delivery' ? 'cash' : 'other',
           amount: finalTotal, // ✅ Use finalTotal (GHS), not total (might be pesewas)
           currency: 'GHS',
-          status: paymentStatus, // ✅ Consistent with order payment_status
-          payment_status: paymentStatus, // ✅ Consistent with order payment_status
+          status: paymentStatus === 'paid' ? 'success' : 'pending',
+          payment_status: paymentStatus,
           customer_email: customerEmail || 'no-email@example.com', // Required field - provide default if missing
           metadata: {
             order_number: finalOrderNumber, // ✅ Use generated order number
@@ -1290,7 +1290,10 @@ export class OrderController {
               .insert([transactionData]);
 
             if (transactionError) {
-              console.error('Error creating transaction:', transactionError);
+              console.error('Error creating transaction:', {
+                order_number: orderData.order_number,
+                error: transactionError,
+              });
             } else {
               console.log('✅ Created transaction for order:', orderData.order_number);
             }
@@ -1302,13 +1305,19 @@ export class OrderController {
             .insert([transactionData]);
 
           if (transactionError) {
-            console.error('Error creating transaction:', transactionError);
+            console.error('Error creating transaction:', {
+              order_number: orderData.order_number,
+              error: transactionError,
+            });
           } else {
             console.log('✅ Created transaction for order:', orderData.order_number);
           }
         }
       } catch (transactionError) {
-        console.error('Error creating/linking transaction:', transactionError);
+        console.error('Error creating/linking transaction:', {
+          order_number: orderData.order_number,
+          error: transactionError,
+        });
         // Don't fail order creation if transaction creation fails
       }
 
