@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
 import { affiliateSettings } from './affiliateSettings.service';
+import { AffiliateError } from './affiliate.service';
 
 type AuditReq = Request & { user?: { id?: string; role?: string } };
 
@@ -266,6 +267,17 @@ export async function createPendingCommission(input: {
   const order = await firstEligibleOrder(attributed, categoryIds, products);
   if (!order?.affiliate_id) return null;
 
+  const { data: affiliate, error: affiliateError } = await supabaseAdmin
+    .from('affiliates')
+    .select('id, status')
+    .eq('id', order.affiliate_id)
+    .maybeSingle();
+  if (affiliateError) {
+    logDb('load affiliate for commission', affiliateError);
+    return null;
+  }
+  if (affiliate?.status !== 'active') return null;
+
   const insert = {
     affiliate_id: order.affiliate_id,
     order_id: order.id,
@@ -525,4 +537,104 @@ export async function maybeReverseCommissionForTransaction(
   } catch (error) {
     logDb('maybe reverse commission for transaction', error);
   }
+}
+
+export async function approveCommission(req: AuditReq, commissionId: string) {
+  const { data: commission, error } = await supabaseAdmin
+    .from('affiliate_commissions')
+    .select('*')
+    .eq('id', commissionId)
+    .maybeSingle();
+  if (error) {
+    logDb('load commission for approve', error);
+    throw new AffiliateError(500, 'Could not approve this commission.');
+  }
+  if (!commission) throw new AffiliateError(404, 'Commission not found.');
+  if (commission.status !== 'pending') {
+    throw new AffiliateError(409, 'This commission cannot be approved.');
+  }
+  if (!commission.eligible_from || new Date(commission.eligible_from).getTime() > Date.now()) {
+    throw new AffiliateError(400, 'This commission is not eligible yet.');
+  }
+
+  const { data: order, error: orderError } = await supabaseAdmin
+    .from('orders')
+    .select('id, status, payment_status')
+    .eq('id', commission.order_id)
+    .maybeSingle();
+  if (orderError) {
+    logDb('load order for commission approve', orderError);
+    throw new AffiliateError(500, 'Could not approve this commission.');
+  }
+  if (!order || order.status !== 'delivered' || order.payment_status !== 'paid') {
+    throw new AffiliateError(400, 'This order is not delivered and paid.');
+  }
+
+  const now = new Date().toISOString();
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('affiliate_commissions')
+    .update({
+      status: 'approved',
+      verified_by: req.user?.id || null,
+      verified_at: now,
+    })
+    .eq('id', commission.id)
+    .eq('status', 'pending')
+    .select('*')
+    .maybeSingle();
+  if (updateError) {
+    logDb('approve commission', updateError);
+    throw new AffiliateError(500, 'Could not approve this commission.');
+  }
+  if (!updated) throw new AffiliateError(409, 'This commission cannot be approved.');
+
+  const { data: ledger, error: ledgerError } = await supabaseAdmin
+    .from('affiliate_ledger')
+    .insert({
+      affiliate_id: updated.affiliate_id,
+      type: 'commission_approved',
+      amount_pesewas: updated.amount_pesewas,
+      commission_id: updated.id,
+      note: 'Commission approved',
+      created_by: req.user?.id || null,
+    })
+    .select('*')
+    .single();
+  if (ledgerError && !isUniqueViolation(ledgerError)) {
+    logDb('commission approved ledger', ledgerError);
+    throw new AffiliateError(500, 'Could not approve this commission.');
+  }
+
+  await logAudit({
+    req,
+    entity: 'affiliate_commission',
+    entityId: updated.id,
+    action: 'approved',
+    before: commission,
+    after: { commission: updated, ledger },
+  });
+  return updated;
+}
+
+export async function reverseCommissionById(req: AuditReq, commissionId: string, reason: string) {
+  const { data: commission, error } = await supabaseAdmin
+    .from('affiliate_commissions')
+    .select('*')
+    .eq('id', commissionId)
+    .maybeSingle();
+  if (error) {
+    logDb('load commission for admin reverse', error);
+    throw new AffiliateError(500, 'Could not reverse this commission.');
+  }
+  if (!commission) throw new AffiliateError(404, 'Commission not found.');
+  if (commission.status === 'reversed') {
+    throw new AffiliateError(409, 'This commission is already reversed.');
+  }
+  await maybeReverseCommission(req, { id: commission.order_id }, reason);
+  const { data: latest } = await supabaseAdmin
+    .from('affiliate_commissions')
+    .select('*')
+    .eq('id', commissionId)
+    .maybeSingle();
+  return latest || commission;
 }

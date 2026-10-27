@@ -84,7 +84,7 @@ function lower(value: string | null | undefined): string {
   return (value || '').trim().toLowerCase();
 }
 
-function siteOrigin(): string | null {
+export function siteOrigin(): string | null {
   const raw = (
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
@@ -131,7 +131,7 @@ export function presentAffiliate(row: AffiliateRow) {
   };
 }
 
-async function loadAffiliateByUser(userId: string): Promise<AffiliateRow | null> {
+export async function loadAffiliateByUser(userId: string): Promise<AffiliateRow | null> {
   const { data, error } = await supabaseAdmin
     .from('affiliates')
     .select('*')
@@ -144,7 +144,7 @@ async function loadAffiliateByUser(userId: string): Promise<AffiliateRow | null>
   return (data as AffiliateRow) || null;
 }
 
-async function loadAffiliateById(id: string): Promise<AffiliateRow | null> {
+export async function loadAffiliateById(id: string): Promise<AffiliateRow | null> {
   const { data, error } = await supabaseAdmin
     .from('affiliates')
     .select('*')
@@ -180,7 +180,7 @@ async function nextAffiliateNo(): Promise<string> {
   throw new AffiliateError(500, 'Could not assign an affiliate number. Please try again.');
 }
 
-async function grantAffiliateRole(userId: string) {
+export async function grantAffiliateRole(userId: string, status: 'pending' | 'active' | 'suspended' = 'active') {
   const { data: existing, error: loadError } = await supabaseAdmin
     .from('user_roles')
     .select('id, status')
@@ -189,32 +189,32 @@ async function grantAffiliateRole(userId: string) {
     .maybeSingle();
   if (loadError) {
     logDb('load user_roles affiliate', loadError);
-    throw new AffiliateError(500, 'Could not activate this affiliate.');
+    throw new AffiliateError(500, 'Could not update this affiliate role.');
   }
   if (existing) {
-    if (existing.status === 'active') return;
+    if (existing.status === status) return;
+    const patch: Record<string, unknown> = { status };
+    if (status === 'active') patch.granted_at = new Date().toISOString();
     const { error } = await supabaseAdmin
       .from('user_roles')
-      .update({
-        status: 'active',
-        granted_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq('id', existing.id);
     if (error) {
       logDb('update user_roles affiliate', error);
-      throw new AffiliateError(500, 'Could not activate this affiliate.');
+      throw new AffiliateError(500, 'Could not update this affiliate role.');
     }
     return;
   }
+  if (status !== 'active' && status !== 'pending') return;
   const { error } = await supabaseAdmin.from('user_roles').insert({
     user_id: userId,
     role: 'affiliate',
-    status: 'active',
-    granted_at: new Date().toISOString(),
+    status,
+    granted_at: status === 'active' ? new Date().toISOString() : null,
   });
   if (error && !isUniqueViolation(error)) {
     logDb('insert user_roles affiliate', error);
-    throw new AffiliateError(500, 'Could not activate this affiliate.');
+    throw new AffiliateError(500, 'Could not update this affiliate role.');
   }
 }
 
@@ -232,6 +232,9 @@ export async function activateAffiliate(row: AffiliateRow, req: AuditReq): Promi
         affiliate_no: affiliateNo,
         referral_code: affiliateNo,
         approved_at: row.approved_at || now,
+        approved_by: row.approved_by || req.user?.id || null,
+        suspended_reason: null,
+        rejected_reason: null,
       })
       .eq('id', row.id)
       .select('*')

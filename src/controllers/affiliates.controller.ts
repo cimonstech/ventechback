@@ -9,6 +9,7 @@ import {
   trackClick,
   verifyAffiliateFee,
 } from '../services/affiliate.service';
+import { affiliateSettings } from '../services/affiliateSettings.service';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 
 const momoSchema = z.object({
@@ -54,6 +55,16 @@ function fail(res: Response, error: unknown, fallback: string) {
   }
   console.error(fallback, error);
   return errorResponse(res, fallback, 500);
+}
+
+export async function getPublicInfo(_req: Request, res: Response) {
+  try {
+    const data = await affiliateSettings.publicInfo();
+    return successResponse(res, data);
+  } catch (error) {
+    console.error('affiliate public info', error);
+    return errorResponse(res, 'Could not load affiliate program details.', 500);
+  }
 }
 
 export async function postRegister(req: AuthRequest, res: Response) {

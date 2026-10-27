@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { settingsService } from './settings.service';
 
 const DEFAULTS = {
   affiliate_fee_pesewas: 30000,
@@ -131,5 +132,67 @@ export const affiliateSettings = {
   clearCache() {
     cache = null;
     cacheAt = 0;
+  },
+  toPublic(settings?: AffiliateSettings) {
+    const current = settings || cache || fromMap(new Map());
+    return {
+      affiliate_fee_pesewas: current.feePesewas,
+      affiliate_commission_pesewas: current.commissionPesewas,
+      affiliate_activation_mode: current.activationMode,
+      affiliate_fee_refund_on_rejection: current.refundFeeOnRejection,
+      affiliate_eligible_category_slugs: current.eligibleCategorySlugs,
+      affiliate_min_order_pesewas: current.minOrderPesewas,
+      affiliate_attribution_days: current.attributionDays,
+      affiliate_return_window_days: current.returnWindowDays,
+      affiliate_withdrawal_min_pesewas: current.withdrawalMinPesewas,
+      affiliate_payout_change_hold_hours: current.payoutChangeHoldHours,
+    };
+  },
+  async publicInfo() {
+    const settings = await load();
+    const slugs = settings.eligibleCategorySlugs;
+    let names: string[] = [];
+    if (slugs.length) {
+      const { data, error } = await supabaseAdmin
+        .from('categories')
+        .select('name, slug')
+        .in('slug', slugs);
+      if (error) {
+        console.error('affiliate public categories', error);
+      }
+      const bySlug = new Map(
+        (data || []).map((row) => [String(row.slug), String(row.name || row.slug)])
+      );
+      names = slugs.map((slug) => bySlug.get(slug) || slug);
+    }
+    return {
+      fee_pesewas: settings.feePesewas,
+      commission_pesewas: settings.commissionPesewas,
+      eligible_category_names: names,
+      min_withdrawal_pesewas: settings.withdrawalMinPesewas,
+      payout_methods: ['momo', 'bank'] as const,
+    };
+  },
+  async save(values: Record<string, string>, userId: string): Promise<AffiliateSettings> {
+    const keys = Object.keys(values);
+    for (const key of keys) {
+      const { error } = await supabaseAdmin
+        .from('settings')
+        .update({
+          value: values[key],
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
+        .eq('key', key)
+        .eq('category', 'affiliate');
+      if (error) {
+        console.error('save affiliate setting', key, error);
+        throw error;
+      }
+    }
+    cache = null;
+    cacheAt = 0;
+    settingsService.clearCache();
+    return load();
   },
 };

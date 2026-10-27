@@ -26,6 +26,7 @@ import devicesRoutes from './routes/devices.routes';
 import adminDevicesRoutes from './routes/adminDevices.routes';
 import ticketsRoutes from './routes/tickets.routes';
 import adminTicketsRoutes from './routes/adminTickets.routes';
+import adminAffiliatesRoutes from './routes/adminAffiliates.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 import { publicRateLimiter } from './middleware/rateLimit.middleware';
 
@@ -105,6 +106,7 @@ app.use('/api/devices', publicRateLimiter, devicesRoutes);
 app.use('/api/admin/devices', adminDevicesRoutes);
 app.use('/api/tickets', publicRateLimiter, ticketsRoutes);
 app.use('/api/admin/tickets', adminTicketsRoutes);
+app.use('/api/admin/affiliates', adminAffiliatesRoutes);
 app.use('/api/admin/audit-log', auditRoutes);
 app.use('/api/admin/staff', staffRoutes);
 app.use('/api/me', accessRoutes);
