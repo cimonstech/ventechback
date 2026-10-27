@@ -390,9 +390,36 @@ function productWriteError(error: any, fallback: string): { message: string; sta
   return { message: fallback, status: 500 };
 }
 
+function applyWarrantyMonths(record: Record<string, any>, res: Response): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, 'warranty_months')) {
+    return true;
+  }
+
+  const value = record.warranty_months;
+  if (value === null || value === '') {
+    record.warranty_months = null;
+    return true;
+  }
+
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    errorResponse(res, 'Warranty months must be between 0 and 120.', 400);
+    return false;
+  }
+
+  const months = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(months) || months < 0 || months > 120) {
+    errorResponse(res, 'Warranty months must be between 0 and 120.', 400);
+    return false;
+  }
+
+  record.warranty_months = months;
+  return true;
+}
+
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { variants, ...productData } = req.body;
+    if (!applyWarrantyMonths(productData, res)) return;
 
     const { data, error } = await supabaseAdmin
       .from('products')
@@ -423,6 +450,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { variants, ...updates } = req.body;
+    if (!applyWarrantyMonths(updates, res)) return;
 
     // ✅ Auto-sync in_stock flag with stock_quantity
     // If stock_quantity is being updated, automatically set in_stock

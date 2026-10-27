@@ -150,3 +150,17 @@ export const contactRateLimiter = rateLimit({
   handler: standardHandler,
 });
 
+/**
+ * Device claim codes
+ * - Runs after authenticate so the key is the user id
+ * - 5 requests per hour per user
+ */
+export const deviceClaimRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: standardHandler,
+  keyGenerator: getIdentifier,
+});
+

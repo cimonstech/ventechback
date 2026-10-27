@@ -1,23 +1,7 @@
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
-
-const ARTICLE_TYPES = [
-  'user_guide',
-  'maintenance',
-  'troubleshooting',
-  'hardware',
-  'software',
-  'warranty',
-] as const;
-
-const TARGET_RANK: Record<string, number> = {
-  product: 0,
-  brand: 1,
-  category: 2,
-  all: 3,
-};
+import { ARTICLE_TYPES, guidesForProduct } from '../services/contentGuides.service';
 
 function param(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || '';
@@ -174,91 +158,14 @@ export async function getPublicArticle(req: Request, res: Response) {
 export async function articlesForProduct(req: Request, res: Response) {
   try {
     const productId = param(req.params.productId);
-    if (!z.uuid().safeParse(productId).success) {
-      return errorResponse(res, 'Invalid product id', 400);
-    }
-
-    const { data: product, error: productError } = await supabaseAdmin
-      .from('products')
-      .select('id, brand_id, category_id')
-      .eq('id', productId)
-      .maybeSingle();
-
-    if (productError) {
-      logDb('articles for product lookup', productError);
+    const result = await guidesForProduct(productId);
+    if (!result.ok) {
+      if (result.code === 'invalid') return errorResponse(res, 'Invalid product id', 400);
+      if (result.code === 'not_found') return errorResponse(res, 'Product not found', 404);
       return errorResponse(res, 'Failed to load articles', 500);
     }
 
-    if (!product) {
-      return errorResponse(res, 'Product not found', 404);
-    }
-
-    const filters = [
-      'and(target_type.eq.all,target_id.is.null)',
-      `and(target_type.eq.product,target_id.eq.${productId})`,
-    ];
-    if (product.brand_id) {
-      filters.push(`and(target_type.eq.brand,target_id.eq.${product.brand_id})`);
-    }
-    if (product.category_id) {
-      filters.push(`and(target_type.eq.category,target_id.eq.${product.category_id})`);
-    }
-
-    const { data: targets, error: targetError } = await supabaseAdmin
-      .from('content_targets')
-      .select('target_type, article:content_articles!inner(id, type, title, slug, summary, updated_at, sort_order, status)')
-      .or(filters.join(','));
-
-    if (targetError) {
-      logDb('articles for product targets', targetError);
-      return errorResponse(res, 'Failed to load articles', 500);
-    }
-
-    const best = new Map<string, { article: Record<string, any>; targetType: string }>();
-    for (const row of targets || []) {
-      const embedded = row.article as Record<string, any> | Record<string, any>[] | null;
-      const article = Array.isArray(embedded) ? embedded[0] : embedded;
-      if (!article || article.status !== 'published') continue;
-
-      const current = best.get(article.id);
-      const nextRank = TARGET_RANK[row.target_type] ?? 99;
-      const currentRank = current ? (TARGET_RANK[current.targetType] ?? 99) : 99;
-      if (!current || nextRank < currentRank) {
-        best.set(article.id, { article, targetType: row.target_type });
-      }
-    }
-
-    const grouped: Record<string, Array<Record<string, unknown>>> = {};
-    for (const type of ARTICLE_TYPES) {
-      grouped[type] = [];
-    }
-
-    for (const entry of best.values()) {
-      const list = grouped[entry.article.type];
-      if (!list) continue;
-      list.push({
-        id: entry.article.id,
-        type: entry.article.type,
-        title: entry.article.title,
-        slug: entry.article.slug,
-        summary: entry.article.summary,
-        updated_at: entry.article.updated_at,
-        sort_order: entry.article.sort_order,
-        target_type: entry.targetType,
-      });
-    }
-
-    for (const type of ARTICLE_TYPES) {
-      grouped[type].sort((left, right) => {
-        const byTarget = (TARGET_RANK[String(left.target_type)] ?? 99) - (TARGET_RANK[String(right.target_type)] ?? 99);
-        if (byTarget !== 0) return byTarget;
-        const byOrder = Number(left.sort_order) - Number(right.sort_order);
-        if (byOrder !== 0) return byOrder;
-        return String(left.title).localeCompare(String(right.title));
-      });
-    }
-
-    return successResponse(res, grouped);
+    return successResponse(res, result.guides);
   } catch (error) {
     logDb('articles for product', error);
     return errorResponse(res, 'Failed to load articles', 500);

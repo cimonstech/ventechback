@@ -664,7 +664,7 @@ This bulk order request was submitted through the VENTECH website.
   }
 }
 
-const emailService = new EmailService();
+export const emailService = new EmailService();
 
 // Export individual functions for specific use cases
 export const sendInvestmentEmail = emailService.sendInvestmentEmail.bind(emailService);
