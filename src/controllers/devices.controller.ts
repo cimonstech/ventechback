@@ -17,8 +17,9 @@ import {
 const PUBLIC_SELECT = `
   id, qr_token, user_id, product_id, order_id, customer_name, customer_email,
   model_name, serial_number, purchase_date, warranty_months, warranty_start, status,
+  owner_linked_at,
   product:products!devices_product_id_fkey(slug, thumbnail),
-  order:orders!devices_order_id_fkey(id, order_number)
+  order:orders!devices_order_id_fkey(id, order_number, user_id)
 `;
 
 function param(value: string | string[] | undefined): string {
@@ -33,6 +34,14 @@ function one<T>(value: T | T[] | null | undefined): T | null {
 
 function logDb(scope: string, error: unknown) {
   console.error(scope, error);
+}
+
+function currentOwner(user: { id?: string; email?: string | null; full_name?: string | null } | undefined) {
+  return {
+    id: user?.id || '',
+    email: user?.email ?? null,
+    fullName: user?.full_name ?? null,
+  };
 }
 
 async function deviceByToken(token: string) {
@@ -74,7 +83,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
     if (isOwner) {
       return successResponse(res, {
         view: 'owner',
-        ...toOwnerView(data, product, order),
+        ...toOwnerView(data, product, order, currentOwner(req.user)),
         guides,
       });
     }
@@ -209,9 +218,10 @@ export async function verifyClaim(req: AuthRequest, res: Response) {
       return errorResponse(res, 'That code is not correct.', 400);
     }
 
+    const linkedAt = new Date().toISOString();
     const { data: updated, error: updateError } = await supabaseAdmin
       .from('devices')
-      .update({ user_id: userId })
+      .update({ user_id: userId, owner_linked_at: linkedAt })
       .eq('id', data.id)
       .is('user_id', null)
       .select('id')
@@ -242,7 +252,12 @@ export async function verifyClaim(req: AuthRequest, res: Response) {
     const order = one(data.order);
     return successResponse(
       res,
-      toOwnerView(data, product, order),
+      toOwnerView(
+        { ...data, owner_linked_at: linkedAt },
+        product,
+        order,
+        currentOwner(req.user)
+      ),
       'Laptop added to your account.'
     );
   } catch (error) {
@@ -267,7 +282,7 @@ export async function listMine(req: AuthRequest, res: Response) {
     }
 
     const devices = (data || []).map((row) => ({
-      ...toOwnerView(row, one(row.product), one(row.order)),
+      ...toOwnerView(row, one(row.product), one(row.order), currentOwner(req.user)),
       qr_token: row.qr_token,
     }));
     return successResponse(res, devices);

@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, paginatedResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
-import { generateQrToken, sendDeviceRegistrationEmail, warrantyStatus } from '../services/device.service';
+import { generateQrToken, sendDeviceRegistrationEmail, sendOwnerLinkedEmail, warrantyStatus } from '../services/device.service';
 
 const DEVICE_STATUSES = ['active', 'transferred', 'retired'] as const;
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -37,9 +37,10 @@ const LIST_SELECT = `
   customer_name, customer_email, customer_phone,
   model_name, serial_number, purchase_date,
   warranty_months, warranty_start, qr_token, status, notes,
+  owner_linked_at,
   created_by, updated_by, created_at, updated_at,
   product:products!devices_product_id_fkey(id, name, slug, thumbnail),
-  order:orders!devices_order_id_fkey(id, order_number)
+  order:orders!devices_order_id_fkey(id, order_number, user_id)
 `;
 
 const DETAIL_SELECT = `
@@ -130,6 +131,7 @@ function auditDevice(row: Record<string, any> | null) {
     warranty_start: row.warranty_start ?? null,
     status: row.status ?? null,
     notes: row.notes ?? null,
+    owner_linked_at: row.owner_linked_at ?? null,
   };
 }
 
@@ -156,7 +158,7 @@ function presentDevice(row: Record<string, any>) {
           thumbnail: product.thumbnail ?? null,
         }
       : null,
-    order: order ? { id: order.id, order_number: order.order_number } : null,
+    order: order ? { id: order.id, order_number: order.order_number, user_id: order.user_id ?? null } : null,
     owner: owner
       ? {
           id: owner.id,
@@ -502,6 +504,7 @@ export async function createDevices(req: AuthRequest, res: Response) {
         warranty_start: purchaseDate,
         qr_token: generateQrToken(),
         status: 'active',
+        owner_linked_at: customer.user_id ? new Date().toISOString() : null,
         created_by: actor,
         updated_by: actor,
       });
@@ -725,6 +728,7 @@ export async function linkOwner(req: AuthRequest, res: Response) {
       .from('devices')
       .update({
         user_id: account.id,
+        owner_linked_at: new Date().toISOString(),
         status: nextStatus,
         updated_by: req.user?.id ?? null,
       })
@@ -744,6 +748,12 @@ export async function linkOwner(req: AuthRequest, res: Response) {
       action: 'link-owner',
       before: auditDevice(before),
       after: auditDevice(data),
+    });
+
+    await sendOwnerLinkedEmail({
+      to: account.email || '',
+      modelName: data.model_name,
+      qrToken: data.qr_token,
     });
 
     return successResponse(res, presentDevice(data), 'Owner linked.');
@@ -775,7 +785,7 @@ export async function unlinkOwner(req: AuthRequest, res: Response) {
 
     const { data, error } = await supabaseAdmin
       .from('devices')
-      .update({ user_id: null, updated_by: req.user?.id ?? null })
+      .update({ user_id: null, owner_linked_at: null, updated_by: req.user?.id ?? null })
       .eq('id', id)
       .select(DETAIL_SELECT)
       .maybeSingle();

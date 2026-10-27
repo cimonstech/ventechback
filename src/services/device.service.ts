@@ -19,7 +19,14 @@ type ProductView = {
 type OrderView = {
   id?: string | null;
   order_number?: string | null;
+  user_id?: string | null;
 } | null;
+
+type OwnerAccount = {
+  id: string;
+  email?: string | null;
+  fullName?: string | null;
+};
 
 export type PublicDeviceView = {
   model_name: string;
@@ -30,13 +37,24 @@ export type PublicDeviceView = {
   warranty: WarrantyState;
 };
 
-export type OwnerDeviceView = PublicDeviceView & {
+export type OriginalOwnerView = PublicDeviceView & {
+  ownership: 'original';
   customer_name: string | null;
   serial_number: string;
   purchase_date: string;
   order_number: string | null;
   order_id: string | null;
 };
+
+export type TransferredOwnerView = PublicDeviceView & {
+  ownership: 'transferred';
+  owner_name: string | null;
+  serial_number: string;
+  purchase_date: string;
+  linked_at: string | null;
+};
+
+export type OwnerDeviceView = OriginalOwnerView | TransferredOwnerView;
 
 export function generateQrToken(): string {
   return randomBytes(16).toString('base64url');
@@ -114,24 +132,60 @@ export function toPublicView(
   };
 }
 
+function emailsMatch(left?: string | null, right?: string | null): boolean {
+  const a = (left || '').trim().toLowerCase();
+  const b = (right || '').trim().toLowerCase();
+  return Boolean(a && b && a === b);
+}
+
+export function isOriginalBuyer(
+  device: { customer_email?: string | null },
+  order: { user_id?: string | null } | null,
+  owner: { id: string; email?: string | null }
+): boolean {
+  if (order?.user_id && order.user_id === owner.id) return true;
+  return emailsMatch(owner.email, device.customer_email);
+}
+
+function purchaseDateOf(value: string): string {
+  return typeof value === 'string' ? value.slice(0, 10) : value;
+}
+
 export function toOwnerView(
   device: {
     model_name: string;
     customer_name?: string | null;
+    customer_email?: string | null;
     serial_number: string;
     purchase_date: string;
     order_id?: string | null;
+    owner_linked_at?: string | null;
   } & DeviceWarranty,
   product: ProductView,
-  order: OrderView
+  order: OrderView,
+  owner: OwnerAccount
 ): OwnerDeviceView {
-  return {
+  const shared = {
     ...toPublicView(device, product),
-    customer_name: device.customer_name ?? null,
     serial_number: device.serial_number,
-    purchase_date: typeof device.purchase_date === 'string' ? device.purchase_date.slice(0, 10) : device.purchase_date,
-    order_number: order?.order_number ?? null,
-    order_id: order?.id ?? device.order_id ?? null,
+    purchase_date: purchaseDateOf(device.purchase_date),
+  };
+
+  if (isOriginalBuyer(device, order, owner)) {
+    return {
+      ...shared,
+      ownership: 'original',
+      customer_name: device.customer_name ?? null,
+      order_number: order?.order_number ?? null,
+      order_id: order?.id ?? device.order_id ?? null,
+    };
+  }
+
+  return {
+    ...shared,
+    ownership: 'transferred',
+    owner_name: owner.fullName ?? null,
+    linked_at: device.owner_linked_at ?? null,
   };
 }
 
@@ -190,6 +244,42 @@ export async function sendDeviceRegistrationEmail(input: {
     }
   } catch (error) {
     console.error('Device registration email failed:', error);
+  }
+}
+
+export async function sendOwnerLinkedEmail(input: {
+  to: string;
+  modelName: string;
+  qrToken: string;
+}): Promise<void> {
+  const site = siteOrigin();
+  if (!site) {
+    console.error('Owner linked email skipped: NEXT_PUBLIC_SITE_URL or SITE_URL is not set');
+    return;
+  }
+  if (!input.to) {
+    console.error('Owner linked email skipped: new owner has no email');
+    return;
+  }
+
+  const url = `${site}/d/${encodeURIComponent(input.qrToken)}`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;margin:0 auto;padding:24px;">
+    <h1 style="font-size:22px;margin:0 0 16px;">A VENTECH laptop has been added to your account</h1>
+    <p style="margin:0 0 8px;font-size:16px;"><strong>${escapeHtml(input.modelName)}</strong></p>
+    <p style="margin:0 0 24px;"><a href="${url}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">View your laptop</a></p>
+  </div>`;
+
+  try {
+    const sent = await emailService.sendEmail({
+      to: input.to,
+      subject: 'A VENTECH laptop has been added to your account',
+      html,
+    });
+    if (!sent) {
+      console.error('Owner linked email was not sent');
+    }
+  } catch (error) {
+    console.error('Owner linked email failed:', error);
   }
 }
 
