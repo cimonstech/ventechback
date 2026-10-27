@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
+import { supabaseAdmin } from '../utils/supabaseClient';
 import { emailService } from './email.service';
 
 export type WarrantyState = {
@@ -81,6 +82,53 @@ export function maskEmail(email: string): string {
   if (!local || !domain) return '****';
   if (local.length === 1) return `${local[0]}****@${domain}`;
   return `${local[0]}****${local[local.length - 1]}@${domain}`;
+}
+
+function trimmed(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+}
+
+function metadataName(meta: unknown): string {
+  if (!meta || typeof meta !== 'object') return '';
+  const record = meta as Record<string, unknown>;
+  return trimmed(record.full_name) || trimmed(record.name);
+}
+
+export async function ownerDisplayName(
+  user: {
+    id?: string | null;
+    full_name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    email?: string | null;
+  } | null | undefined,
+  options: { maskEmail: boolean }
+): Promise<string> {
+  const fullName = trimmed(user?.full_name);
+  if (fullName) return fullName;
+
+  const combined = [trimmed(user?.first_name), trimmed(user?.last_name)].filter(Boolean).join(' ').trim();
+  if (combined) return combined;
+
+  if (user?.id) {
+    try {
+      const { data, error } = await supabaseAdmin.auth.admin.getUserById(user.id);
+      if (error) {
+        console.error('owner display name auth lookup', error);
+      } else {
+        const authUser = data?.user as { user_metadata?: unknown; raw_user_meta_data?: unknown } | undefined;
+        const fromAuth = metadataName(authUser?.raw_user_meta_data) || metadataName(authUser?.user_metadata);
+        if (fromAuth) return fromAuth;
+      }
+    } catch (error) {
+      console.error('owner display name auth lookup', error);
+    }
+  }
+
+  const email = trimmed(user?.email);
+  if (!email) return '';
+  return options.maskEmail ? maskEmail(email) : email;
 }
 
 function isIsoDate(value: string): boolean {
@@ -184,7 +232,7 @@ export function toOwnerView(
   return {
     ...shared,
     ownership: 'transferred',
-    owner_name: owner.fullName ?? null,
+    owner_name: owner.fullName || null,
     linked_at: device.owner_linked_at ?? null,
   };
 }

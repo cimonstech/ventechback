@@ -9,6 +9,7 @@ import {
   generateClaimCode,
   hashClaimCode,
   maskEmail,
+  ownerDisplayName,
   sendClaimCodeEmail,
   toOwnerView,
   toPublicView,
@@ -36,11 +37,17 @@ function logDb(scope: string, error: unknown) {
   console.error(scope, error);
 }
 
-function currentOwner(user: { id?: string; email?: string | null; full_name?: string | null } | undefined) {
+async function currentOwner(user: {
+  id?: string;
+  email?: string | null;
+  full_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+} | undefined) {
   return {
     id: user?.id || '',
     email: user?.email ?? null,
-    fullName: user?.full_name ?? null,
+    fullName: await ownerDisplayName(user, { maskEmail: true }),
   };
 }
 
@@ -83,7 +90,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
     if (isOwner) {
       return successResponse(res, {
         view: 'owner',
-        ...toOwnerView(data, product, order, currentOwner(req.user)),
+        ...toOwnerView(data, product, order, await currentOwner(req.user)),
         guides,
       });
     }
@@ -256,7 +263,7 @@ export async function verifyClaim(req: AuthRequest, res: Response) {
         { ...data, owner_linked_at: linkedAt },
         product,
         order,
-        currentOwner(req.user)
+        await currentOwner(req.user)
       ),
       'Laptop added to your account.'
     );
@@ -281,8 +288,9 @@ export async function listMine(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to load your laptops', 500);
     }
 
+    const owner = await currentOwner(req.user);
     const devices = (data || []).map((row) => ({
-      ...toOwnerView(row, one(row.product), one(row.order), currentOwner(req.user)),
+      ...toOwnerView(row, one(row.product), one(row.order), owner),
       qr_token: row.qr_token,
     }));
     return successResponse(res, devices);
