@@ -427,6 +427,39 @@ function productWriteError(error: any, fallback: string): { message: string; sta
   return { message: fallback, status: 500 };
 }
 
+const OPERATING_SYSTEMS = ['windows', 'macos', 'chromeos', 'linux', 'none'] as const;
+const PRODUCT_CONDITIONS = ['new', 'refurbished', 'used'] as const;
+
+function applyOperatingSystem(record: Record<string, any>, res: Response): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, 'operating_system')) return true;
+  const value = record.operating_system;
+  if (value === null || value === '') {
+    record.operating_system = null;
+    return true;
+  }
+  if (typeof value !== 'string' || !OPERATING_SYSTEMS.includes(value as (typeof OPERATING_SYSTEMS)[number])) {
+    errorResponse(res, 'Operating system must be windows, macos, chromeos, linux, or none.', 400);
+    return false;
+  }
+  record.operating_system = value;
+  return true;
+}
+
+function applyCondition(record: Record<string, any>, res: Response): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, 'condition')) return true;
+  const value = record.condition;
+  if (value === null || value === '') {
+    record.condition = 'new';
+    return true;
+  }
+  if (typeof value !== 'string' || !PRODUCT_CONDITIONS.includes(value as (typeof PRODUCT_CONDITIONS)[number])) {
+    errorResponse(res, 'Condition must be new, refurbished, or used.', 400);
+    return false;
+  }
+  record.condition = value;
+  return true;
+}
+
 function applyWarrantyMonths(record: Record<string, any>, res: Response): boolean {
   if (!Object.prototype.hasOwnProperty.call(record, 'warranty_months')) {
     return true;
@@ -457,6 +490,8 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { variants, ...productData } = req.body;
     if (!applyWarrantyMonths(productData, res)) return;
+    if (!applyOperatingSystem(productData, res)) return;
+    if (!applyCondition(productData, res)) return;
 
     const { data, error } = await supabaseAdmin
       .from('products')
@@ -495,6 +530,8 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     }
 
     if (!applyWarrantyMonths(updates, res)) return;
+    if (!applyOperatingSystem(updates, res)) return;
+    if (!applyCondition(updates, res)) return;
 
     // ✅ Auto-sync in_stock flag with stock_quantity
     // If stock_quantity is being updated, automatically set in_stock

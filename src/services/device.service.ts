@@ -3,7 +3,7 @@ import { supabaseAdmin } from '../utils/supabaseClient';
 import { emailService } from './email.service';
 
 export type WarrantyState = {
-  status: 'active' | 'expired' | 'none';
+  status: 'active' | 'expired' | 'none' | 'starts_on_delivery';
   endsOn: string | null;
 };
 
@@ -45,6 +45,7 @@ export type OriginalOwnerView = PublicDeviceView & {
   purchase_date: string;
   order_number: string | null;
   order_id: string | null;
+  linked_at: string | null;
 };
 
 export type TransferredOwnerView = PublicDeviceView & {
@@ -62,6 +63,7 @@ export type PendingPublicView = {
     slug: string | null;
     thumbnail: string | null;
   };
+  warranty: WarrantyState;
 };
 
 export type PendingOwnerView = PendingPublicView & {
@@ -166,6 +168,9 @@ function addMonths(isoDate: string, months: number): string | null {
 export function warrantyStatus(device: DeviceWarranty): WarrantyState {
   const months = Number(device.warranty_months ?? 0);
   const start = typeof device.warranty_start === 'string' ? device.warranty_start.slice(0, 10) : '';
+  if (Number.isInteger(months) && months > 0 && !isIsoDate(start)) {
+    return { status: 'starts_on_delivery', endsOn: null };
+  }
   if (!Number.isInteger(months) || months <= 0 || !isIsoDate(start)) {
     return { status: 'none', endsOn: null };
   }
@@ -214,7 +219,7 @@ function purchaseDateOf(value: string): string {
 }
 
 export function toPendingPublicView(
-  device: { model_name: string },
+  device: { model_name: string } & DeviceWarranty,
   product: ProductView
 ): PendingPublicView {
   return {
@@ -224,6 +229,7 @@ export function toPendingPublicView(
       slug: product?.slug ?? null,
       thumbnail: product?.thumbnail ?? null,
     },
+    warranty: warrantyStatus(device),
   };
 }
 
@@ -266,6 +272,7 @@ export function toOwnerView(
       customer_name: device.customer_name ?? null,
       order_number: order?.order_number ?? null,
       order_id: order?.id ?? device.order_id ?? null,
+      linked_at: device.owner_linked_at ?? null,
     };
   }
 

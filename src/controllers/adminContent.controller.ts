@@ -6,6 +6,7 @@ import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
 import { sanitizeContentHtml } from '../services/sanitize.service';
 import { pathsForContentPage, revalidateContent } from '../services/revalidate.service';
+import { OPERATING_SYSTEMS, PRODUCT_CONDITIONS } from '../services/contentGuides.service';
 
 const ARTICLE_TYPES = [
   'user_guide',
@@ -26,7 +27,12 @@ const PAGE_SLUGS = [
   'shipping',
   'affiliate-terms',
   'laptop-banking-terms',
+  'warranty',
 ] as const;
+
+const FAQ_AUDIENCES = ['store', 'device_portal', 'both'] as const;
+const osListSchema = z.array(z.enum(OPERATING_SYSTEMS)).nullable().optional();
+const conditionListSchema = z.array(z.enum(PRODUCT_CONDITIONS)).nullable().optional();
 
 const targetSchema = z.object({
   target_type: z.enum(TARGET_TYPES),
@@ -72,6 +78,8 @@ const articleSchema = z.object({
   attachment_url: z.string().trim().max(2000).nullable().optional(),
   status: z.enum(STATUSES).optional(),
   sort_order: z.number().int().optional(),
+  applies_to_os: osListSchema,
+  applies_to_condition: conditionListSchema,
   targets: targetsSchema.optional().default([]),
 });
 
@@ -84,6 +92,8 @@ const articleUpdateSchema = z.object({
   attachment_url: z.string().trim().max(2000).nullable().optional(),
   status: z.enum(STATUSES).optional(),
   sort_order: z.number().int().optional(),
+  applies_to_os: osListSchema,
+  applies_to_condition: conditionListSchema,
   targets: targetsSchema.optional(),
 });
 
@@ -91,6 +101,7 @@ const categorySchema = z.object({
   name: z.string().trim().min(1).max(200),
   sort_order: z.number().int().optional(),
   is_active: z.boolean().optional(),
+  audience: z.enum(FAQ_AUDIENCES).optional(),
 });
 
 const faqSchema = z.object({
@@ -311,6 +322,8 @@ export async function createArticle(req: AuthRequest, res: Response) {
         status,
         sort_order: body.sort_order ?? 0,
         published_at: status === 'published' ? new Date().toISOString() : null,
+        applies_to_os: body.applies_to_os ?? null,
+        applies_to_condition: body.applies_to_condition ?? null,
         created_by: actorId(req),
         updated_by: actorId(req),
       })
@@ -369,6 +382,8 @@ export async function updateArticle(req: AuthRequest, res: Response) {
     if (body.summary !== undefined) updates.summary = body.summary;
     if (body.attachment_url !== undefined) updates.attachment_url = body.attachment_url;
     if (body.sort_order !== undefined) updates.sort_order = body.sort_order;
+    if (body.applies_to_os !== undefined) updates.applies_to_os = body.applies_to_os;
+    if (body.applies_to_condition !== undefined) updates.applies_to_condition = body.applies_to_condition;
     if (body.body_html !== undefined) updates.body_html = sanitizeContentHtml(body.body_html);
     if (body.status !== undefined) {
       updates.status = body.status;
@@ -529,6 +544,7 @@ export async function createFaqCategory(req: AuthRequest, res: Response) {
         slug,
         sort_order: body.sort_order ?? 0,
         is_active: body.is_active ?? true,
+        audience: body.audience ?? 'store',
       })
       .select('*')
       .single();
@@ -583,6 +599,7 @@ export async function updateFaqCategory(req: AuthRequest, res: Response) {
     if (body.name !== undefined) updates.name = body.name;
     if (body.sort_order !== undefined) updates.sort_order = body.sort_order;
     if (body.is_active !== undefined) updates.is_active = body.is_active;
+    if (body.audience !== undefined) updates.audience = body.audience;
 
     const { data, error } = await supabaseAdmin
       .from('faq_categories')

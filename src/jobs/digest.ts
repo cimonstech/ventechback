@@ -25,6 +25,8 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
   const today = todayAccra();
   const weekEnd = addDays(today, 6);
 
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
   const [
     commissionsReady,
     openWithdrawals,
@@ -33,6 +35,8 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
     vlbPayoutsDueWeek,
     vlbInSettlement,
     vlbNewApplications,
+    awaitingSerialCount,
+    awaitingSerialRows,
   ] = await Promise.all([
     countOrZero(
       'digest commissions ready',
@@ -77,7 +81,36 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
       'digest vlb applications new',
       supabaseAdmin.from('vlb_applications').select('id', { count: 'exact', head: true }).eq('status', 'new')
     ),
+    countOrZero(
+      'digest awaiting serial count',
+      supabaseAdmin
+        .from('devices')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+        .lt('created_at', twoDaysAgo)
+    ),
+    supabaseAdmin
+      .from('devices')
+      .select('id, created_at, order:orders!devices_order_id_fkey(order_number)')
+      .eq('status', 'pending')
+      .lt('created_at', twoDaysAgo)
+      .order('created_at', { ascending: true })
+      .limit(20),
   ]);
+
+  if (awaitingSerialRows.error) {
+    console.error('digest awaiting serial', awaitingSerialRows.error);
+    throw new Error('Could not load the admin summary.');
+  }
+  const awaitingSerial = awaitingSerialRows.data || [];
+  const oldestOrders = [...new Set(
+    awaitingSerial
+      .map((row) => {
+        const order = Array.isArray(row.order) ? row.order[0] : row.order;
+        return order && typeof order.order_number === 'string' ? order.order_number : '';
+      })
+      .filter(Boolean)
+  )].slice(0, 8);
 
   const counts = {
     commissions_ready: commissionsReady,
@@ -87,6 +120,7 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
     vlb_payouts_due_week: vlbPayoutsDueWeek,
     vlb_in_settlement: vlbInSettlement,
     vlb_new_applications: vlbNewApplications,
+    awaiting_serial_over_2_days: awaitingSerialCount,
   };
 
   if (Object.values(counts).every((value) => value === 0)) {
@@ -107,6 +141,7 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
           <li>Laptop Banking payouts due this week: ${vlbPayoutsDueWeek}</li>
           <li>Laptop Banking investments in settlement: ${vlbInSettlement}</li>
           <li>Laptop Banking new applications: ${vlbNewApplications}</li>
+          <li>Laptops awaiting serial for more than 2 days: ${awaitingSerialCount}${oldestOrders.length ? ` (oldest: ${oldestOrders.join(', ')})` : ''}</li>
         </ul>
         <p>VENTECH Gadgets</p>
       `,

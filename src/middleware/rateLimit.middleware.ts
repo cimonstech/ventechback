@@ -159,6 +159,15 @@ export const contactRateLimiter = rateLimit({
  * - Runs after authenticate so the key is the user id
  * - 5 requests per hour per user
  */
+export const portalEventRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: standardHandler,
+  keyGenerator: (req: Request) => `ip:${req.ip || 'unknown'}`,
+});
+
 export const deviceClaimRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 5,

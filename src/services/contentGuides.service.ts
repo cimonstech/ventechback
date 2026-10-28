@@ -18,6 +18,12 @@ const TARGET_RANK: Record<string, number> = {
   all: 3,
 };
 
+export const OPERATING_SYSTEMS = ['windows', 'macos', 'chromeos', 'linux', 'none'] as const;
+export const PRODUCT_CONDITIONS = ['new', 'refurbished', 'used'] as const;
+
+export type OperatingSystem = (typeof OPERATING_SYSTEMS)[number];
+export type ProductCondition = (typeof PRODUCT_CONDITIONS)[number];
+
 export type GuideArticle = {
   id: string;
   type: string;
@@ -49,7 +55,7 @@ export async function guidesForProduct(productId: string): Promise<
 
   const { data: product, error: productError } = await supabaseAdmin
     .from('products')
-    .select('id, brand_id, category_id')
+    .select('id, brand_id, category_id, operating_system, condition')
     .eq('id', productId)
     .maybeSingle();
 
@@ -75,7 +81,7 @@ export async function guidesForProduct(productId: string): Promise<
 
   const { data: targets, error: targetError } = await supabaseAdmin
     .from('content_targets')
-    .select('target_type, article:content_articles!inner(id, type, title, slug, summary, updated_at, sort_order, status)')
+    .select('target_type, article:content_articles!inner(id, type, title, slug, summary, updated_at, sort_order, status, applies_to_os, applies_to_condition)')
     .or(filters.join(','));
 
   if (targetError) {
@@ -88,6 +94,7 @@ export async function guidesForProduct(productId: string): Promise<
     const embedded = row.article as Record<string, any> | Record<string, any>[] | null;
     const article = Array.isArray(embedded) ? embedded[0] : embedded;
     if (!article || article.status !== 'published') continue;
+    if (!articleMatchesProduct(article, product.operating_system, product.condition)) continue;
 
     const current = best.get(article.id);
     const nextRank = TARGET_RANK[row.target_type] ?? 99;
@@ -124,4 +131,26 @@ export async function guidesForProduct(productId: string): Promise<
   }
 
   return { ok: true, guides: grouped };
+}
+
+function asTextList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
+function articleMatchesProduct(
+  article: { applies_to_os?: unknown; applies_to_condition?: unknown },
+  operatingSystem: string | null | undefined,
+  condition: string | null | undefined
+): boolean {
+  const osList = asTextList(article.applies_to_os);
+  const conditionList = asTextList(article.applies_to_condition);
+  const osOk = operatingSystem
+    ? osList.length === 0 || osList.includes(operatingSystem)
+    : osList.length === 0;
+  const productCondition = condition && PRODUCT_CONDITIONS.includes(condition as ProductCondition)
+    ? condition
+    : 'new';
+  const conditionOk = conditionList.length === 0 || conditionList.includes(productCondition);
+  return osOk && conditionOk;
 }

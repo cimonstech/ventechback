@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { ARTICLE_TYPES, guidesForProduct } from '../services/contentGuides.service';
-import { defaultGuideBySlug } from '../services/devicePortalDefaults.service';
 
 function param(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || '';
@@ -19,6 +18,7 @@ export async function listPublicFaqs(_req: Request, res: Response) {
       .from('faq_categories')
       .select('id, name, slug, sort_order')
       .eq('is_active', true)
+      .in('audience', ['store', 'both'])
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true });
 
@@ -146,21 +146,6 @@ export async function getPublicArticle(req: Request, res: Response) {
     }
 
     if (!data || data.status !== 'published') {
-      const fallback = defaultGuideBySlug(slug);
-      if (fallback) {
-        return successResponse(res, {
-          id: fallback.id,
-          type: fallback.type,
-          title: fallback.title,
-          slug: fallback.slug,
-          summary: fallback.summary,
-          body_html: fallback.body_html,
-          attachment_url: null,
-          sort_order: fallback.sort_order,
-          published_at: fallback.updated_at,
-          updated_at: fallback.updated_at,
-        });
-      }
       return errorResponse(res, 'Article not found', 404);
     }
 

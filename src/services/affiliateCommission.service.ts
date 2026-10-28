@@ -4,6 +4,7 @@ import { logAudit } from './audit.service';
 import { emailService } from './email.service';
 import { affiliateSettings } from './affiliateSettings.service';
 import { AffiliateError } from './affiliate.service';
+import { tryStartPreorderWarrantiesForOrder } from './deviceRegistration.service';
 
 type AuditReq = Request & { user?: { id?: string; role?: string } };
 
@@ -377,6 +378,7 @@ export async function maybeMarkDelivered(req: AuditReq, order: CheckoutOrder): P
         .is('delivered_at', null);
       if (error) logDb('set delivered_at', error);
     }
+    await tryStartPreorderWarrantiesForOrder(order.id, deliveredAt);
 
     const { data: commission, error } = await supabaseAdmin
       .from('affiliate_commissions')

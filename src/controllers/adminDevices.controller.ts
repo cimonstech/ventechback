@@ -6,9 +6,11 @@ import { errorResponse, paginatedResponse, successResponse } from '../utils/resp
 import { logAudit } from '../services/audit.service';
 import { generateQrToken, ownerDisplayName, sendDeviceRegistrationEmail, sendOwnerLinkedEmail, warrantyStatus } from '../services/device.service';
 import {
+  countLaptopProductsWithoutOs,
   countLaptopProductsWithoutWarranty,
   orderDeviceStatus,
 } from '../services/deviceRegistration.service';
+import { portalEventStats } from '../services/portalEvents.service';
 
 const DEVICE_STATUSES = ['pending', 'active', 'transferred', 'retired'] as const;
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -275,9 +277,11 @@ export async function listDevices(req: AuthRequest, res: Response) {
       return query;
     };
 
+    const oldestFirst = status === 'pending';
+
     if (warranty) {
       const { data, error } = await applyFilters(
-        supabaseAdmin.from('devices').select(LIST_SELECT).order('created_at', { ascending: false })
+        supabaseAdmin.from('devices').select(LIST_SELECT).order('created_at', { ascending: oldestFirst })
       );
       if (error) {
         logDb('list devices', error);
@@ -298,7 +302,7 @@ export async function listDevices(req: AuthRequest, res: Response) {
     const from = (page - 1) * limit;
     const [{ data, error }, countResult] = await Promise.all([
       applyFilters(
-        supabaseAdmin.from('devices').select(LIST_SELECT).order('created_at', { ascending: false })
+        supabaseAdmin.from('devices').select(LIST_SELECT).order('created_at', { ascending: oldestFirst })
       ).range(from, from + limit - 1),
       applyFilters(supabaseAdmin.from('devices').select('id', { count: 'exact', head: true })),
     ]);
@@ -970,5 +974,25 @@ export async function getLaptopWarrantyGaps(req: AuthRequest, res: Response) {
   } catch (error) {
     logDb('laptop warranty gaps', error);
     return errorResponse(res, 'Failed to load warranty gaps', 500);
+  }
+}
+
+export async function getLaptopOsGaps(_req: AuthRequest, res: Response) {
+  try {
+    const gaps = await countLaptopProductsWithoutOs();
+    return successResponse(res, gaps);
+  } catch (error) {
+    logDb('laptop os gaps', error);
+    return errorResponse(res, 'Failed to load operating system gaps', 500);
+  }
+}
+
+export async function getPortalStats(_req: AuthRequest, res: Response) {
+  try {
+    const stats = await portalEventStats();
+    return successResponse(res, stats);
+  } catch (error) {
+    logDb('portal stats', error);
+    return errorResponse(res, 'Failed to load portal activity', 500);
   }
 }

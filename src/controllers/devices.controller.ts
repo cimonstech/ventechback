@@ -4,7 +4,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
 import { emptyGuides, guidesForProduct } from '../services/contentGuides.service';
-import { laptopPortalFaqs, withDefaultGuides } from '../services/devicePortalDefaults.service';
+import { recordPortalEvent as storePortalEvent } from '../services/portalEvents.service';
 import {
   claimCodesMatch,
   generateClaimCode,
@@ -65,44 +65,50 @@ async function deviceByToken(token: string) {
 }
 
 async function guidesForDevice(productId: string | null) {
-  if (!productId) return withDefaultGuides(emptyGuides());
+  if (!productId) return emptyGuides();
   const loaded = await guidesForProduct(productId);
-  if (loaded.ok) return withDefaultGuides(loaded.guides);
+  if (loaded.ok) return loaded.guides;
   if (loaded.code === 'failed') {
     console.error('Device guides failed to load');
   }
-  return withDefaultGuides(emptyGuides());
+  return emptyGuides();
+}
+
+function guideOrderFor(device: { status?: string | null; owner_linked_at?: string | null }): 'setup' | 'owner' {
+  if (device.status === 'pending') return 'setup';
+  const linked = device.owner_linked_at ? Date.parse(device.owner_linked_at) : NaN;
+  if (Number.isFinite(linked) && Date.now() - linked < 14 * 24 * 60 * 60 * 1000) return 'setup';
+  return 'owner';
 }
 
 async function faqsForLaptopPortal() {
-  const { data: category, error: categoryError } = await supabaseAdmin
+  const { data: categories, error: categoryError } = await supabaseAdmin
     .from('faq_categories')
     .select('id')
-    .eq('slug', 'your-laptop')
-    .maybeSingle();
+    .eq('is_active', true)
+    .in('audience', ['device_portal', 'both']);
   if (categoryError) {
     logDb('laptop portal faqs category', categoryError);
-    return laptopPortalFaqs(null);
+    return [];
   }
-  if (!category) return laptopPortalFaqs(null);
+  const ids = (categories || []).map((row) => row.id);
+  if (ids.length === 0) return [];
 
   const { data: faqs, error: faqError } = await supabaseAdmin
     .from('faqs')
     .select('id, question, answer_html, sort_order')
-    .eq('category_id', category.id)
+    .in('category_id', ids)
     .eq('status', 'published')
     .order('sort_order', { ascending: true });
   if (faqError) {
     logDb('laptop portal faqs', faqError);
-    return laptopPortalFaqs(null);
+    return [];
   }
-  return laptopPortalFaqs(
-    (faqs || []).map((row) => ({
-      id: row.id,
-      question: row.question,
-      answer_html: row.answer_html,
-    }))
-  );
+  return (faqs || []).map((row) => ({
+    id: row.id,
+    question: row.question,
+    answer_html: row.answer_html,
+  }));
 }
 
 export async function publicDevice(req: AuthRequest, res: Response) {
@@ -122,6 +128,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
     const guides = await guidesForDevice(data.product_id);
     const faqs = await faqsForLaptopPortal();
     const isOwner = Boolean(req.user?.id && data.user_id && req.user.id === data.user_id);
+    const guide_order = guideOrderFor(data);
 
     if (data.status === 'pending') {
       if (isOwner) {
@@ -130,6 +137,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
           ...toPendingOwnerView(data, product, order),
           guides,
           faqs,
+          guide_order,
         });
       }
       return successResponse(res, {
@@ -137,6 +145,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
         ...toPendingPublicView(data, product),
         guides,
         faqs,
+        guide_order,
       });
     }
 
@@ -147,6 +156,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
         qr_token: data.qr_token,
         guides,
         faqs,
+        guide_order,
       });
     }
 
@@ -156,6 +166,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
       ...toPublicView(data, product),
       guides,
       faqs,
+      guide_order,
     });
   } catch (error) {
     logDb('public device', error);
@@ -379,5 +390,28 @@ export async function linkPendingDevices(req: AuthRequest, res: Response) {
   } catch (error) {
     logDb('link pending devices', error);
     return errorResponse(res, 'Failed to link devices', 500);
+  }
+}
+
+export async function recordPortalEvent(req: AuthRequest, res: Response) {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+    const event = typeof body.event === 'string' ? body.event.trim() : '';
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    const articleId = typeof body.article_id === 'string' ? body.article_id.trim() : '';
+    const session = typeof req.headers['x-vt-session'] === 'string' ? req.headers['x-vt-session'] : '';
+    const stored = await storePortalEvent({
+      event,
+      token: token || null,
+      articleId: articleId || null,
+      sessionId: session || null,
+    });
+    if (!stored.ok) {
+      return errorResponse(res, stored.message, stored.status);
+    }
+    return successResponse(res, { recorded: true });
+  } catch (error) {
+    logDb('record portal event', error);
+    return errorResponse(res, 'Failed to record the event', 500);
   }
 }

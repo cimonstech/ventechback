@@ -101,7 +101,7 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
 
   const { data: order, error: orderError } = await supabaseAdmin
     .from('orders')
-    .select('id, user_id, customer_bio, shipping_address, created_at')
+    .select('id, user_id, customer_bio, shipping_address, created_at, is_pre_order, delivered_at')
     .eq('id', orderId)
     .maybeSingle();
   if (orderError) {
@@ -117,7 +117,7 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
     .from('order_items')
     .select(`
       id, product_id, product_name, quantity,
-      product:products!order_items_product_id_fkey ( id, name, warranty_months, category_id )
+      product:products!order_items_product_id_fkey ( id, name, warranty_months, category_id, is_pre_order )
     `)
     .eq('order_id', orderId);
   if (itemError) {
@@ -147,6 +147,8 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
 
   const customer = customerFromOrder(order, account);
   const itemIds = eligible.map((item) => item.id);
+  const orderIsPreOrder = Boolean(order.is_pre_order || record(order.shipping_address).is_pre_order);
+  const deliveredDate = dateOnly(order.delivered_at);
   const { data: existing, error: existingError } = await supabaseAdmin
     .from('devices')
     .select('order_item_id, unit_no')
@@ -164,13 +166,15 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
 
   const rows = [];
   for (const item of eligible) {
-    const product = one(item.product as { id?: string; name?: string; warranty_months?: number | null } | null);
+    const product = one(item.product as { id?: string; name?: string; warranty_months?: number | null; is_pre_order?: boolean | null } | null);
     const modelName = product?.name || item.product_name;
     if (!modelName) continue;
     const quantity = Math.min(100, Math.max(0, Math.floor(Number(item.quantity) || 0)));
     const warrantyMonths = Number.isInteger(product?.warranty_months)
       ? Number(product?.warranty_months)
       : 0;
+    const itemIsPreOrder = orderIsPreOrder || Boolean(product?.is_pre_order);
+    const warrantyStart = itemIsPreOrder ? deliveredDate : purchaseDate;
     for (let unitNo = 1; unitNo <= quantity; unitNo += 1) {
       if (taken.has(`${item.id}:${unitNo}`)) continue;
       rows.push({
@@ -186,7 +190,7 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
         unit_no: unitNo,
         purchase_date: purchaseDate,
         warranty_months: warrantyMonths,
-        warranty_start: purchaseDate,
+        warranty_start: warrantyStart,
         qr_token: generateQrToken(),
         status: 'pending',
         owner_linked_at: order.user_id ? new Date().toISOString() : null,
@@ -205,6 +209,18 @@ export async function createPendingDevicesForOrder(orderId: string): Promise<num
     throw insertError;
   }
   return rows.length;
+}
+
+export async function tryStartPreorderWarrantiesForOrder(
+  orderId: string | null | undefined,
+  deliveredAt: string | null | undefined
+): Promise<void> {
+  if (!orderId) return;
+  try {
+    await startPreorderWarrantiesForOrder(orderId, deliveredAt);
+  } catch (error) {
+    console.error('start preorder warranties for order failed', orderId, error);
+  }
 }
 
 export async function tryCreatePendingDevicesForOrder(orderId: string | null | undefined): Promise<void> {
@@ -356,6 +372,39 @@ export async function linkPendingDevicesForVerifiedUser(
     });
   }
   return linked;
+}
+
+export async function startPreorderWarrantiesForOrder(
+  orderId: string,
+  deliveredAt: string | null | undefined
+): Promise<void> {
+  const start = dateOnly(deliveredAt);
+  if (!start) return;
+  const { error } = await supabaseAdmin
+    .from('devices')
+    .update({ warranty_start: start })
+    .eq('order_id', orderId)
+    .is('warranty_start', null);
+  if (error) {
+    logDb('start preorder warranties', error);
+  }
+}
+
+export async function countLaptopProductsWithoutOs(): Promise<{ count: number; ids: string[] }> {
+  const categoryIds = await registrationCategoryIds();
+  if (categoryIds.size === 0) return { count: 0, ids: [] };
+
+  const { data, error } = await supabaseAdmin
+    .from('products')
+    .select('id, category_id, operating_system')
+    .in('category_id', [...categoryIds])
+    .is('operating_system', null);
+  if (error) {
+    logDb('laptop products without os', error);
+    throw error;
+  }
+  const ids = (data || []).map((row) => row.id);
+  return { count: ids.length, ids };
 }
 
 export async function countLaptopProductsWithoutWarranty(): Promise<{ count: number; ids: string[] }> {

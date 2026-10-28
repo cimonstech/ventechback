@@ -264,7 +264,7 @@ export async function createTicket(req: AuthRequest, res: Response) {
     if (token) {
       const { data: device, error: deviceError } = await supabaseAdmin
         .from('devices')
-        .select('id, user_id, order_id, model_name, serial_number, warranty_months, warranty_start')
+        .select('id, user_id, order_id, model_name, serial_number, warranty_months, warranty_start, status')
         .eq('qr_token', token)
         .maybeSingle();
       if (deviceError) {
@@ -276,7 +276,8 @@ export async function createTicket(req: AuthRequest, res: Response) {
       orderId = device.order_id;
       laptopModel = device.model_name;
       serialNumber = device.serial_number;
-      warranty = warrantyStatus(device).status;
+      const cover = warrantyStatus(device).status;
+      warranty = device.status === 'pending' || cover === 'starts_on_delivery' ? 'unknown' : cover;
     } else {
       if (!laptopModel) return errorResponse(res, 'Enter the laptop model.', 400);
       const orderNumber = body.order_number?.trim() || '';

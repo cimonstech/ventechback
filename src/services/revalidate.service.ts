@@ -4,6 +4,7 @@ const PAGE_PATHS: Record<string, string[]> = {
   returns: ['/returns'],
   shipping: ['/shipping'],
   'laptop-banking-terms': ['/laptop-banking', '/laptop-banking/terms'],
+  warranty: ['/warranty'],
 };
 
 export async function revalidateContent(paths: string[]): Promise<void> {
