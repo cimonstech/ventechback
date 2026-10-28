@@ -41,7 +41,7 @@ export type PublicDeviceView = {
 export type OriginalOwnerView = PublicDeviceView & {
   ownership: 'original';
   customer_name: string | null;
-  serial_number: string;
+  serial_number: string | null;
   purchase_date: string;
   order_number: string | null;
   order_id: string | null;
@@ -50,9 +50,23 @@ export type OriginalOwnerView = PublicDeviceView & {
 export type TransferredOwnerView = PublicDeviceView & {
   ownership: 'transferred';
   owner_name: string | null;
-  serial_number: string;
+  serial_number: string | null;
   purchase_date: string;
   linked_at: string | null;
+};
+
+export type PendingPublicView = {
+  registering: true;
+  model_name: string;
+  product: {
+    slug: string | null;
+    thumbnail: string | null;
+  };
+};
+
+export type PendingOwnerView = PendingPublicView & {
+  order_number: string | null;
+  order_id: string | null;
 };
 
 export type OwnerDeviceView = OriginalOwnerView | TransferredOwnerView;
@@ -199,12 +213,38 @@ function purchaseDateOf(value: string): string {
   return typeof value === 'string' ? value.slice(0, 10) : value;
 }
 
+export function toPendingPublicView(
+  device: { model_name: string },
+  product: ProductView
+): PendingPublicView {
+  return {
+    registering: true,
+    model_name: device.model_name,
+    product: {
+      slug: product?.slug ?? null,
+      thumbnail: product?.thumbnail ?? null,
+    },
+  };
+}
+
+export function toPendingOwnerView(
+  device: { model_name: string; order_id?: string | null },
+  product: ProductView,
+  order: OrderView
+): PendingOwnerView {
+  return {
+    ...toPendingPublicView(device, product),
+    order_number: order?.order_number ?? null,
+    order_id: order?.id ?? device.order_id ?? null,
+  };
+}
+
 export function toOwnerView(
   device: {
     model_name: string;
     customer_name?: string | null;
     customer_email?: string | null;
-    serial_number: string;
+    serial_number?: string | null;
     purchase_date: string;
     order_id?: string | null;
     owner_linked_at?: string | null;
@@ -215,7 +255,7 @@ export function toOwnerView(
 ): OwnerDeviceView {
   const shared = {
     ...toPublicView(device, product),
-    serial_number: device.serial_number,
+    serial_number: device.serial_number ?? null,
     purchase_date: purchaseDateOf(device.purchase_date),
   };
 

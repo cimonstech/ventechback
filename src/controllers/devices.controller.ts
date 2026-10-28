@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
 import { emptyGuides, guidesForProduct } from '../services/contentGuides.service';
+import { laptopPortalFaqs, withDefaultGuides } from '../services/devicePortalDefaults.service';
 import {
   claimCodesMatch,
   generateClaimCode,
@@ -12,8 +13,11 @@ import {
   ownerDisplayName,
   sendClaimCodeEmail,
   toOwnerView,
+  toPendingOwnerView,
+  toPendingPublicView,
   toPublicView,
 } from '../services/device.service';
+import { linkPendingDevicesForVerifiedUser } from '../services/deviceRegistration.service';
 
 const PUBLIC_SELECT = `
   id, qr_token, user_id, product_id, order_id, customer_name, customer_email,
@@ -61,13 +65,44 @@ async function deviceByToken(token: string) {
 }
 
 async function guidesForDevice(productId: string | null) {
-  if (!productId) return emptyGuides();
+  if (!productId) return withDefaultGuides(emptyGuides());
   const loaded = await guidesForProduct(productId);
-  if (loaded.ok) return loaded.guides;
+  if (loaded.ok) return withDefaultGuides(loaded.guides);
   if (loaded.code === 'failed') {
     console.error('Device guides failed to load');
   }
-  return emptyGuides();
+  return withDefaultGuides(emptyGuides());
+}
+
+async function faqsForLaptopPortal() {
+  const { data: category, error: categoryError } = await supabaseAdmin
+    .from('faq_categories')
+    .select('id')
+    .eq('slug', 'your-laptop')
+    .maybeSingle();
+  if (categoryError) {
+    logDb('laptop portal faqs category', categoryError);
+    return laptopPortalFaqs(null);
+  }
+  if (!category) return laptopPortalFaqs(null);
+
+  const { data: faqs, error: faqError } = await supabaseAdmin
+    .from('faqs')
+    .select('id, question, answer_html, sort_order')
+    .eq('category_id', category.id)
+    .eq('status', 'published')
+    .order('sort_order', { ascending: true });
+  if (faqError) {
+    logDb('laptop portal faqs', faqError);
+    return laptopPortalFaqs(null);
+  }
+  return laptopPortalFaqs(
+    (faqs || []).map((row) => ({
+      id: row.id,
+      question: row.question,
+      answer_html: row.answer_html,
+    }))
+  );
 }
 
 export async function publicDevice(req: AuthRequest, res: Response) {
@@ -85,7 +120,25 @@ export async function publicDevice(req: AuthRequest, res: Response) {
     const product = one(data.product);
     const order = one(data.order);
     const guides = await guidesForDevice(data.product_id);
+    const faqs = await faqsForLaptopPortal();
     const isOwner = Boolean(req.user?.id && data.user_id && req.user.id === data.user_id);
+
+    if (data.status === 'pending') {
+      if (isOwner) {
+        return successResponse(res, {
+          view: 'owner',
+          ...toPendingOwnerView(data, product, order),
+          guides,
+          faqs,
+        });
+      }
+      return successResponse(res, {
+        view: 'public',
+        ...toPendingPublicView(data, product),
+        guides,
+        faqs,
+      });
+    }
 
     if (isOwner) {
       return successResponse(res, {
@@ -93,6 +146,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
         ...toOwnerView(data, product, order, await currentOwner(req.user)),
         qr_token: data.qr_token,
         guides,
+        faqs,
       });
     }
 
@@ -101,6 +155,7 @@ export async function publicDevice(req: AuthRequest, res: Response) {
       claimable: data.user_id === null,
       ...toPublicView(data, product),
       guides,
+      faqs,
     });
   } catch (error) {
     logDb('public device', error);
@@ -120,6 +175,7 @@ export async function claimDevice(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to send the claim code', 500);
     }
     if (!data || data.status === 'retired') return errorResponse(res, 'Device not found.', 404);
+    if (data.status === 'pending') return errorResponse(res, 'This laptop is being registered.', 409);
     if (data.user_id) return errorResponse(res, 'This laptop is already registered.', 409);
     if (!data.customer_email) {
       return errorResponse(res, "This laptop can't be claimed online. Please contact VENTECH support.", 409);
@@ -176,6 +232,7 @@ export async function verifyClaim(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to verify the code', 500);
     }
     if (!data || data.status === 'retired') return errorResponse(res, 'Device not found.', 404);
+    if (data.status === 'pending') return errorResponse(res, 'This laptop is being registered.', 409);
     if (data.user_id) return errorResponse(res, 'This laptop is already registered.', 409);
 
     const now = new Date().toISOString();
@@ -290,13 +347,37 @@ export async function listMine(req: AuthRequest, res: Response) {
     }
 
     const owner = await currentOwner(req.user);
-    const devices = (data || []).map((row) => ({
-      ...toOwnerView(row, one(row.product), one(row.order), owner),
-      qr_token: row.qr_token,
-    }));
+    const devices = (data || []).map((row) => {
+      if (row.status === 'pending') {
+        return {
+          id: row.id,
+          status: 'pending',
+          ...toPendingOwnerView(row, one(row.product), one(row.order)),
+          qr_token: row.qr_token,
+        };
+      }
+      return {
+        id: row.id,
+        status: row.status,
+        ...toOwnerView(row, one(row.product), one(row.order), owner),
+        qr_token: row.qr_token,
+      };
+    });
     return successResponse(res, devices);
   } catch (error) {
     logDb('list my devices', error);
     return errorResponse(res, 'Failed to load your laptops', 500);
+  }
+}
+
+export async function linkPendingDevices(req: AuthRequest, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return errorResponse(res, 'Unauthorized', 401);
+    const linked = await linkPendingDevicesForVerifiedUser(req, userId);
+    return successResponse(res, { linked });
+  } catch (error) {
+    logDb('link pending devices', error);
+    return errorResponse(res, 'Failed to link devices', 500);
   }
 }

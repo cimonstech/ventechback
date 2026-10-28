@@ -35,13 +35,15 @@ export const paginatedResponse = (
     total: number;
     totalPages: number;
   },
-  message: string = 'Success'
+  message: string = 'Success',
+  extra: Record<string, unknown> = {}
 ) => {
   return res.status(200).json({
     success: true,
     message,
     data,
     pagination,
+    ...extra,
   });
 };
 

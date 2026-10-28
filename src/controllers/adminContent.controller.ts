@@ -13,6 +13,7 @@ const ARTICLE_TYPES = [
   'troubleshooting',
   'hardware',
   'software',
+  'battery',
   'warranty',
 ] as const;
 

@@ -20,6 +20,10 @@ import {
   maybeMarkDelivered,
   maybeReverseCommission,
 } from '../services/affiliateCommission.service';
+import {
+  tryCreatePendingDevicesForOrder,
+  tryHandleOrderCancelledOrRefunded,
+} from '../services/deviceRegistration.service';
 
 export class OrderController {
   // Get all orders (admin)
@@ -419,6 +423,7 @@ export class OrderController {
       }
       if (status === 'cancelled' && previousStatus !== 'cancelled') {
         await maybeReverseCommission(req, orderData, 'Order cancelled');
+        await tryHandleOrderCancelledOrRefunded(req, Array.isArray(id) ? id[0] : id, 'cancelled');
       }
 
       // Extract is_pre_order from updated orderData (reuse existing isPreOrder variable from above)
@@ -545,9 +550,11 @@ export class OrderController {
 
       if (payment_status === 'paid' && existingOrder.payment_status !== 'paid') {
         await maybeCreateCommissionAfterPayment(req, orderData);
+        await tryCreatePendingDevicesForOrder(Array.isArray(id) ? id[0] : id);
       }
       if (payment_status === 'refunded' && existingOrder.payment_status !== 'refunded') {
         await maybeReverseCommission(req, orderData, 'Order refunded');
+        await tryHandleOrderCancelledOrRefunded(req, Array.isArray(id) ? id[0] : id, 'refunded');
       }
 
       res.json({
@@ -642,6 +649,7 @@ export class OrderController {
 
       if (existingOrder.status !== 'cancelled') {
         await maybeReverseCommission(req, orderData, cancellation_reason || 'Order cancelled');
+        await tryHandleOrderCancelledOrRefunded(req, Array.isArray(id) ? id[0] : id, 'cancelled');
       }
 
       // ✅ Restore stock for cancelled orders (only for non-pre-orders)
@@ -868,6 +876,9 @@ export class OrderController {
         if (existingOrder) {
           console.log(`ℹ️ Order ${existingOrder.order_number} already exists for payment ${payment_reference}`);
           await maybeCreateCommissionAfterPayment(req, existingOrder);
+          if (existingOrder.payment_status === 'paid') {
+            await tryCreatePendingDevicesForOrder(existingOrder.id);
+          }
           return res.json({
             success: true,
             message: 'Order already exists for this payment',
@@ -1494,6 +1505,7 @@ export class OrderController {
           ...orderData,
           order_items: orderItems,
         });
+        await tryCreatePendingDevicesForOrder(orderData.id);
       }
 
       res.json({

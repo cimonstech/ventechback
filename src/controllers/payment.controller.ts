@@ -6,6 +6,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { PricingError, priceOrder } from '../services/pricing.service';
 import { AffiliateError, applyAffiliateFeePaid } from '../services/affiliate.service';
 import { maybeCreateCommissionForPayment } from '../services/affiliateCommission.service';
+import { tryCreatePendingDevicesForOrder } from '../services/deviceRegistration.service';
 
 export class PaymentController {
   // Initialize Paystack transaction (from backend as per Paystack best practices)
@@ -313,6 +314,7 @@ export class PaymentController {
                 console.error('Error updating order payment status:', updateOrderError);
               } else {
                 console.log(`✅ Updated order ${orderIdToUpdate} payment_status to 'paid' with method '${paymentMethod}'`);
+                await tryCreatePendingDevicesForOrder(orderIdToUpdate);
               }
             } catch (updateError) {
               console.error('Error updating order payment status:', updateError);

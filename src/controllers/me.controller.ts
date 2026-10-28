@@ -40,7 +40,7 @@ export async function getMyOverview(req: AuthRequest, res: Response) {
         .limit(1),
       supabaseAdmin
         .from('devices')
-        .select('model_name, warranty_start, warranty_months, created_at')
+        .select('model_name, warranty_start, warranty_months, created_at, status')
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
       supabaseAdmin
@@ -85,6 +85,7 @@ export async function getMyOverview(req: AuthRequest, res: Response) {
     const latestOrder = one(ordersResult.data);
     const devices = devicesResult.data || [];
     const endingSoon = devices.filter((device) => {
+      if (device.status === 'pending') return false;
       const warranty = warrantyStatus(device);
       return Boolean(warranty.endsOn && warranty.endsOn >= today && warranty.endsOn <= soon);
     }).length;
@@ -123,8 +124,9 @@ export async function getMyOverview(req: AuthRequest, res: Response) {
           const warranty = warrantyStatus(device);
           return {
             model: device.model_name,
-            warranty_status: warranty.status,
-            warranty_end: warranty.endsOn,
+            status: device.status || 'active',
+            warranty_status: device.status === 'pending' ? 'pending' : warranty.status,
+            warranty_end: device.status === 'pending' ? null : warranty.endsOn,
           };
         }),
         warranty_ending_soon: endingSoon,

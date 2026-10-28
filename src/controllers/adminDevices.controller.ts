@@ -5,8 +5,12 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, paginatedResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
 import { generateQrToken, ownerDisplayName, sendDeviceRegistrationEmail, sendOwnerLinkedEmail, warrantyStatus } from '../services/device.service';
+import {
+  countLaptopProductsWithoutWarranty,
+  orderDeviceStatus,
+} from '../services/deviceRegistration.service';
 
-const DEVICE_STATUSES = ['active', 'transferred', 'retired'] as const;
+const DEVICE_STATUSES = ['pending', 'active', 'transferred', 'retired'] as const;
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const createSchema = z.object({
@@ -17,6 +21,7 @@ const createSchema = z.object({
     serial_number: z.string().trim().min(1).max(200),
     warranty_months: z.number().int().min(0).max(120).nullish(),
     purchase_date: dateSchema.nullish(),
+    device_id: z.uuid().optional(),
   })).min(1).max(100),
 });
 
@@ -24,8 +29,9 @@ const updateSchema = z.object({
   serial_number: z.string().trim().min(1).max(200).optional(),
   warranty_months: z.number().int().min(0).max(120).optional(),
   warranty_start: dateSchema.optional(),
+  warranty_start_reason: z.string().trim().min(1).max(500).optional(),
   notes: z.string().max(5000).nullable().optional(),
-  status: z.enum(DEVICE_STATUSES).optional(),
+  status: z.enum(['active', 'transferred', 'retired']).optional(),
 }).refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update' });
 
 const linkSchema = z.object({
@@ -35,11 +41,11 @@ const linkSchema = z.object({
 const LIST_SELECT = `
   id, order_id, order_item_id, product_id, user_id,
   customer_name, customer_email, customer_phone,
-  model_name, serial_number, purchase_date,
+  model_name, serial_number, unit_no, purchase_date,
   warranty_months, warranty_start, qr_token, status, notes,
   owner_linked_at,
   created_by, updated_by, created_at, updated_at,
-  product:products!devices_product_id_fkey(id, name, slug, thumbnail),
+  product:products!devices_product_id_fkey(id, name, slug, thumbnail, warranty_months),
   order:orders!devices_order_id_fkey(id, order_number, user_id)
 `;
 
@@ -98,6 +104,18 @@ function dateOnly(value: string | null | undefined): string | null {
   if (!value) return null;
   const date = value.slice(0, 10);
   return isIsoDate(date) ? date : null;
+}
+
+async function countPendingDevices(): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from('devices')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'pending');
+  if (error) {
+    logDb('count pending devices', error);
+    return 0;
+  }
+  return count || 0;
 }
 
 function searchTerm(raw: string): string {
@@ -160,6 +178,7 @@ async function presentDevice(row: Record<string, any>) {
           name: product.name,
           slug: product.slug ?? null,
           thumbnail: product.thumbnail ?? null,
+          warranty_months: product.warranty_months ?? null,
         }
       : null,
     order: order ? { id: order.id, order_number: order.order_number, user_id: order.user_id ?? null } : null,
@@ -220,7 +239,7 @@ export async function listDevices(req: AuthRequest, res: Response) {
     const term = searchTerm(queryValue(req.query.search));
 
     if (status && !DEVICE_STATUSES.includes(status as (typeof DEVICE_STATUSES)[number])) {
-      return errorResponse(res, 'Status must be active, transferred, or retired.', 400);
+      return errorResponse(res, 'Status must be pending, active, transferred, or retired.', 400);
     }
     if (warranty && warranty !== 'active' && warranty !== 'expired') {
       return errorResponse(res, 'Warranty filter must be active or expired.', 400);
@@ -267,12 +286,13 @@ export async function listDevices(req: AuthRequest, res: Response) {
       const filtered = (await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row))))
         .filter((row) => row.warranty.status === warranty);
       const start = (page - 1) * limit;
+      const pendingCount = await countPendingDevices();
       return paginatedResponse(res, filtered.slice(start, start + limit), {
         page,
         limit,
         total: filtered.length,
         totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
-      });
+      }, 'Success', { pending_count: pendingCount });
     }
 
     const from = (page - 1) * limit;
@@ -289,12 +309,13 @@ export async function listDevices(req: AuthRequest, res: Response) {
     }
 
     const total = countResult.count || 0;
+    const pendingCount = await countPendingDevices();
     return paginatedResponse(res, await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row))), {
       page,
       limit,
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
-    });
+    }, 'Success', { pending_count: pendingCount });
   } catch (error) {
     logDb('list devices', error);
     return errorResponse(res, 'Failed to load devices', 500);
@@ -340,29 +361,42 @@ export async function lookupOrder(req: AuthRequest, res: Response) {
 
     const { data: registered, error: registeredError } = await supabaseAdmin
       .from('devices')
-      .select('order_item_id')
+      .select('id, order_item_id, unit_no, status, serial_number, warranty_months, purchase_date, product_id')
       .eq('order_id', order.id);
     if (registeredError) {
       logDb('device order lookup counts', registeredError);
       return errorResponse(res, 'Failed to load the order', 500);
     }
 
-    const counts = new Map<string, number>();
+    const byItem = new Map<string, NonNullable<typeof registered>>();
     for (const row of registered || []) {
       if (!row.order_item_id) continue;
-      counts.set(row.order_item_id, (counts.get(row.order_item_id) || 0) + 1);
+      const list = byItem.get(row.order_item_id) || [];
+      list.push(row);
+      byItem.set(row.order_item_id, list);
     }
 
     const customer = customerFromOrder(order, account);
     const items = (order.order_items || []).map((item: any) => {
       const product = one(item.product);
+      const rows = byItem.get(item.id) || [];
+      const pending = rows
+        .filter((row) => row.status === 'pending')
+        .sort((a, b) => (a.unit_no || 0) - (b.unit_no || 0));
       return {
         order_item_id: item.id,
         product_id: item.product_id,
         product_name: product?.name || item.product_name,
         quantity: item.quantity,
         warranty_months: product?.warranty_months ?? null,
-        devices_registered: counts.get(item.id) || 0,
+        devices_registered: rows.filter((row) => row.status !== 'pending').length,
+        pending_devices: pending.map((row) => ({
+          id: row.id,
+          unit_no: row.unit_no,
+          warranty_months: row.warranty_months ?? product?.warranty_months ?? null,
+          purchase_date: row.purchase_date,
+          product_id: row.product_id || item.product_id,
+        })),
       };
     });
 
@@ -434,21 +468,30 @@ export async function createDevices(req: AuthRequest, res: Response) {
     }
 
     const itemsById = new Map((orderItems || []).map((item) => [item.id, item]));
-    const adding = new Map<string, number>();
-    for (const item of body.items) adding.set(item.order_item_id, (adding.get(item.order_item_id) || 0) + 1);
 
     const { data: registered, error: registeredError } = await supabaseAdmin
       .from('devices')
-      .select('order_item_id')
+      .select('id, order_item_id, unit_no, status, serial_number')
       .in('order_item_id', itemIds);
     if (registeredError) {
       logDb('create devices counts', registeredError);
       return errorResponse(res, 'Failed to register devices', 500);
     }
-    const existingCounts = new Map<string, number>();
+
+    const existingById = new Map((registered || []).map((row) => [row.id, row]));
+    const existingByItem = new Map<string, NonNullable<typeof registered>>();
     for (const row of registered || []) {
       if (!row.order_item_id) continue;
-      existingCounts.set(row.order_item_id, (existingCounts.get(row.order_item_id) || 0) + 1);
+      const list = existingByItem.get(row.order_item_id) || [];
+      list.push(row);
+      existingByItem.set(row.order_item_id, list);
+    }
+
+    const completeItems = body.items.filter((item) => item.device_id);
+    const createItems = body.items.filter((item) => !item.device_id);
+    const newCounts = new Map<string, number>();
+    for (const item of createItems) {
+      newCounts.set(item.order_item_id, (newCounts.get(item.order_item_id) || 0) + 1);
     }
 
     const orderDate = dateOnly(order.created_at);
@@ -470,7 +513,13 @@ export async function createDevices(req: AuthRequest, res: Response) {
     const customer = customerFromOrder(order, account);
     const actor = req.user?.id ?? null;
 
-    const rows = [];
+    for (const item of completeItems) {
+      const existing = existingById.get(item.device_id as string);
+      if (!existing || existing.status !== 'pending' || existing.order_item_id !== item.order_item_id) {
+        return errorResponse(res, 'That pending device was not found on this order.', 404);
+      }
+    }
+
     for (const item of body.items) {
       const orderItem = itemsById.get(item.order_item_id);
       if (!orderItem) return errorResponse(res, 'That item is not on this order.', 400);
@@ -480,17 +529,70 @@ export async function createDevices(req: AuthRequest, res: Response) {
       const product = one(orderItem.product as any);
       if (!product?.name) return errorResponse(res, 'That product is no longer available.', 400);
 
-      const already = existingCounts.get(item.order_item_id) || 0;
-      const incoming = adding.get(item.order_item_id) || 0;
-      if (already + incoming > Number(orderItem.quantity || 0)) {
+      const already = (existingByItem.get(item.order_item_id) || []).length;
+      const incomingNew = newCounts.get(item.order_item_id) || 0;
+      if (already + incomingNew > Number(orderItem.quantity || 0)) {
         return errorResponse(
           res,
           `Only ${orderItem.quantity} can be registered for ${product.name}. ${already} already exist.`,
           409
         );
       }
+    }
 
-      const purchaseDate = item.purchase_date || orderDate;
+    const savedRows: Record<string, any>[] = [];
+
+    for (const item of completeItems) {
+      const patch: Record<string, unknown> = {
+        serial_number: item.serial_number,
+        status: 'active',
+        updated_by: actor,
+      };
+      if (item.warranty_months != null) patch.warranty_months = item.warranty_months;
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('devices')
+        .update(patch)
+        .eq('id', item.device_id)
+        .eq('status', 'pending')
+        .select(LIST_SELECT)
+        .maybeSingle();
+      if (updateError) {
+        const unique = dbCode(updateError);
+        if (unique.code === '23505') {
+          return errorResponse(res, `Serial ${item.serial_number} is already registered.`, 409);
+        }
+        logDb('complete pending device', updateError);
+        return errorResponse(res, 'Failed to register devices', 500);
+      }
+      if (!updated) return errorResponse(res, 'That pending device was not found on this order.', 404);
+      await logAudit({
+        req,
+        entity: 'device',
+        entityId: updated.id,
+        action: 'activate',
+        before: { id: item.device_id, status: 'pending', serial_number: null },
+        after: auditDevice(updated),
+      });
+      savedRows.push(updated);
+    }
+
+    const rows = [];
+    for (const item of createItems) {
+      const orderItem = itemsById.get(item.order_item_id)!;
+      const product = one(orderItem.product as any);
+      const used = new Set(
+        (existingByItem.get(item.order_item_id) || [])
+          .map((row) => row.unit_no)
+          .filter((value): value is number => Number.isInteger(value))
+      );
+      let unitNo = 1;
+      while (used.has(unitNo)) unitNo += 1;
+      used.add(unitNo);
+      existingByItem.set(item.order_item_id, [
+        ...(existingByItem.get(item.order_item_id) || []),
+        { id: '', order_item_id: item.order_item_id, unit_no: unitNo, status: 'active', serial_number: item.serial_number },
+      ]);
+
       const warrantyMonths = item.warranty_months ?? product.warranty_months ?? 0;
       rows.push({
         order_id: order.id,
@@ -502,9 +604,10 @@ export async function createDevices(req: AuthRequest, res: Response) {
         customer_phone: customer.customer_phone,
         model_name: product.name,
         serial_number: item.serial_number,
-        purchase_date: purchaseDate,
+        unit_no: unitNo,
+        purchase_date: orderDate,
         warranty_months: warrantyMonths,
-        warranty_start: purchaseDate,
+        warranty_start: orderDate,
         qr_token: generateQrToken(),
         status: 'active',
         owner_linked_at: customer.user_id ? new Date().toISOString() : null,
@@ -513,43 +616,44 @@ export async function createDevices(req: AuthRequest, res: Response) {
       });
     }
 
-    const { data: created, error: insertError } = await supabaseAdmin
-      .from('devices')
-      .insert(rows)
-      .select(LIST_SELECT);
-    if (insertError) {
-      const unique = dbCode(insertError);
-      if (unique.code === '23505') {
-        const serial = serialFromUniqueError(unique.details, body.items.map((item) => item.serial_number));
-        logDb('create devices duplicate', insertError);
-        return errorResponse(
-          res,
-          serial ? `Serial ${serial} is already registered.` : 'That serial number is already registered.',
-          409
-        );
+    if (rows.length) {
+      const { data: created, error: insertError } = await supabaseAdmin
+        .from('devices')
+        .insert(rows)
+        .select(LIST_SELECT);
+      if (insertError) {
+        const unique = dbCode(insertError);
+        if (unique.code === '23505') {
+          const serial = serialFromUniqueError(unique.details, body.items.map((item) => item.serial_number));
+          logDb('create devices duplicate', insertError);
+          return errorResponse(
+            res,
+            serial ? `Serial ${serial} is already registered.` : 'That serial number is already registered.',
+            409
+          );
+        }
+        logDb('create devices', insertError);
+        return errorResponse(res, 'Failed to register devices', 500);
       }
-      logDb('create devices', insertError);
-      return errorResponse(res, 'Failed to register devices', 500);
-    }
-
-    const createdRows = created || [];
-    for (const row of createdRows) {
-      await logAudit({
-        req,
-        entity: 'device',
-        entityId: row.id,
-        action: 'create',
-        after: auditDevice(row),
-      });
+      for (const row of created || []) {
+        await logAudit({
+          req,
+          entity: 'device',
+          entityId: row.id,
+          action: 'create',
+          after: auditDevice(row),
+        });
+        savedRows.push(row);
+      }
     }
 
     await sendDeviceRegistrationEmail({
       to: customer.customer_email || '',
       customerName: customer.customer_name,
-      devices: createdRows.map((row) => ({ model_name: row.model_name, qr_token: row.qr_token })),
+      devices: savedRows.map((row) => ({ model_name: row.model_name, qr_token: row.qr_token })),
     });
 
-    return successResponse(res, await Promise.all(createdRows.map((row) => presentDevice(row))), 'Devices registered.', 201);
+    return successResponse(res, await Promise.all(savedRows.map((row) => presentDevice(row))), 'Devices registered.', savedRows.some((row) => row.status === 'active') && createItems.length ? 201 : 200);
   } catch (error) {
     const unique = dbCode(error);
     if (unique.code === '23505') {
@@ -589,6 +693,9 @@ export async function updateDevice(req: AuthRequest, res: Response) {
     if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Invalid device id', 400);
     const body = parseBody(updateSchema, req.body, res, 'Invalid device details');
     if (!body) return;
+    if ('purchase_date' in (req.body || {})) {
+      return errorResponse(res, 'Purchase date cannot be changed.', 400);
+    }
     if (body.warranty_start && !isIsoDate(body.warranty_start)) {
       return errorResponse(res, 'Warranty start must be a real date.', 400);
     }
@@ -604,14 +711,32 @@ export async function updateDevice(req: AuthRequest, res: Response) {
     }
     if (!before) return errorResponse(res, 'Device not found.', 404);
 
+    if (body.warranty_start) {
+      if (req.user?.role !== 'superadmin') {
+        return errorResponse(res, 'Only a superadmin can change the warranty start date.', 403);
+      }
+      if (!body.warranty_start_reason) {
+        return errorResponse(res, 'Give a reason for changing the warranty start date.', 400);
+      }
+    }
+
+    if (before.status === 'pending' && body.status && body.status !== 'active') {
+      return errorResponse(res, 'Add a serial number to activate this device.', 400);
+    }
+
     if (body.serial_number) {
       const existing = await findSerialOwner(body.serial_number, id);
       if (existing) return errorResponse(res, `Serial ${body.serial_number} is already registered.`, 409);
     }
 
+    const { warranty_start_reason, ...fields } = body;
+    const patch: Record<string, unknown> = { ...fields, updated_by: req.user?.id ?? null };
+    const activating = before.status === 'pending' && Boolean(fields.serial_number);
+    if (activating) patch.status = 'active';
+
     const { data, error } = await supabaseAdmin
       .from('devices')
-      .update({ ...body, updated_by: req.user?.id ?? null })
+      .update(patch)
       .eq('id', id)
       .select(DETAIL_SELECT)
       .maybeSingle();
@@ -636,12 +761,23 @@ export async function updateDevice(req: AuthRequest, res: Response) {
       req,
       entity: 'device',
       entityId: id,
-      action: 'update',
+      action: activating ? 'activate' : body.warranty_start ? 'warranty-start' : 'update',
       before: auditDevice(before),
-      after: auditDevice(data),
+      after: {
+        ...auditDevice(data),
+        ...(warranty_start_reason ? { warranty_start_reason } : {}),
+      },
     });
 
-    return successResponse(res, await presentDevice(data), 'Device updated.');
+    if (activating) {
+      await sendDeviceRegistrationEmail({
+        to: data.customer_email || '',
+        customerName: data.customer_name,
+        devices: [{ model_name: data.model_name, qr_token: data.qr_token }],
+      });
+    }
+
+    return successResponse(res, await presentDevice(data), activating ? 'Laptop registered.' : 'Device updated.');
   } catch (error) {
     logDb('update device', error);
     return errorResponse(res, 'Failed to update device', 500);
@@ -811,5 +947,28 @@ export async function unlinkOwner(req: AuthRequest, res: Response) {
   } catch (error) {
     logDb('unlink device owner', error);
     return errorResponse(res, 'Failed to unlink the owner', 500);
+  }
+}
+
+export async function getOrderDeviceStatus(req: AuthRequest, res: Response) {
+  try {
+    const id = param(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Invalid order id', 400);
+    const status = await orderDeviceStatus(id);
+    if (!status) return errorResponse(res, 'Order not found.', 404);
+    return successResponse(res, status);
+  } catch (error) {
+    logDb('order device status', error);
+    return errorResponse(res, 'Failed to load device status', 500);
+  }
+}
+
+export async function getLaptopWarrantyGaps(req: AuthRequest, res: Response) {
+  try {
+    const gaps = await countLaptopProductsWithoutWarranty();
+    return successResponse(res, gaps);
+  } catch (error) {
+    logDb('laptop warranty gaps', error);
+    return errorResponse(res, 'Failed to load warranty gaps', 500);
   }
 }

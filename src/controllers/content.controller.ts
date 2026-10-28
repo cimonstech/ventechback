@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { ARTICLE_TYPES, guidesForProduct } from '../services/contentGuides.service';
+import { defaultGuideBySlug } from '../services/devicePortalDefaults.service';
 
 function param(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || '';
@@ -132,6 +133,7 @@ export async function listPublicArticles(req: Request, res: Response) {
 export async function getPublicArticle(req: Request, res: Response) {
   try {
     const slug = param(req.params.slug);
+    if (!slug) return errorResponse(res, 'Article not found', 404);
     const { data, error } = await supabaseAdmin
       .from('content_articles')
       .select('id, type, title, slug, summary, body_html, attachment_url, sort_order, published_at, updated_at, status')
@@ -144,6 +146,21 @@ export async function getPublicArticle(req: Request, res: Response) {
     }
 
     if (!data || data.status !== 'published') {
+      const fallback = defaultGuideBySlug(slug);
+      if (fallback) {
+        return successResponse(res, {
+          id: fallback.id,
+          type: fallback.type,
+          title: fallback.title,
+          slug: fallback.slug,
+          summary: fallback.summary,
+          body_html: fallback.body_html,
+          attachment_url: null,
+          sort_order: fallback.sort_order,
+          published_at: fallback.updated_at,
+          updated_at: fallback.updated_at,
+        });
+      }
       return errorResponse(res, 'Article not found', 404);
     }
 

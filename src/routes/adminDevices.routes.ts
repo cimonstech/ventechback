@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { requirePermission } from '../middleware/auth.middleware';
+import { requireAnyPermission, requirePermission } from '../middleware/auth.middleware';
 import {
   createDevices,
   getDevice,
+  getLaptopWarrantyGaps,
   linkOwner,
   listDevices,
   lookupOrder,
@@ -17,6 +18,7 @@ const edit = requirePermission('devices', 'edit');
 
 router.get('/', view, listDevices);
 router.get('/order-lookup', view, lookupOrder);
+router.get('/laptop-warranty-gaps', requireAnyPermission(['products', 'devices'], 'view'), getLaptopWarrantyGaps);
 router.post('/', edit, createDevices);
 router.post('/:id/regenerate-token', edit, regenerateToken);
 router.post('/:id/link-owner', edit, linkOwner);
