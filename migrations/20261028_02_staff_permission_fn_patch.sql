@@ -130,8 +130,7 @@ BEGIN
     'product_variants',
     'product_variant_stock',
     'brands',
-    'categories',
-    'reviews'
+    'categories'
   ]
   LOOP
     EXECUTE format(
@@ -152,6 +151,18 @@ BEGIN
     );
   END LOOP;
 END $$;
+
+CREATE POLICY "staff permission selects reviews"
+  ON public.reviews
+  FOR SELECT
+  TO authenticated
+  USING (public.has_staff_permission('products', 'view'));
+
+CREATE POLICY "staff permission deletes reviews"
+  ON public.reviews
+  FOR DELETE
+  TO authenticated
+  USING (public.has_staff_permission('products', 'edit'));
 
 DO $$
 DECLARE

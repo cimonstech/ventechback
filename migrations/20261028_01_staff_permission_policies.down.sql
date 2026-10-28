@@ -5,6 +5,8 @@ DROP POLICY IF EXISTS "staff permission selects order items" ON public.order_ite
 DROP POLICY IF EXISTS "staff permission selects transactions" ON public.transactions;
 DROP POLICY IF EXISTS "staff permission selects notifications" ON public.notifications;
 DROP POLICY IF EXISTS "staff permission updates notifications" ON public.notifications;
+DROP POLICY IF EXISTS "staff permission selects reviews" ON public.reviews;
+DROP POLICY IF EXISTS "staff permission deletes reviews" ON public.reviews;
 
 DO $$
 DECLARE
@@ -22,7 +24,6 @@ BEGIN
     'product_variant_stock',
     'brands',
     'categories',
-    'reviews',
     'banners',
     'sidebar_ads'
   ]
