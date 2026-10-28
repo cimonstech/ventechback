@@ -7,6 +7,7 @@ import { sendAdminDigest } from './digest';
 import { accraDateKey, accraMonthKey } from './lock';
 import { runMonthEndWithdrawals } from './monthEnd';
 import { runJob } from './run';
+import { runVlbPayoutsDue, runVlbRenewalNudge, runVlbSettlement } from './vlb';
 
 const TZ = 'Africa/Accra';
 
@@ -39,9 +40,24 @@ scheduleJob('0 30 7 * * *', 'admin-digest', async () => {
   await runJob('admin-digest', accraDateKey(), () => sendAdminDigest());
 });
 
+scheduleJob('0 0 6 * * *', 'vlb-payouts-due', async () => {
+  await runJob('vlb-payouts-due', accraDateKey(), () => runVlbPayoutsDue());
+});
+
+scheduleJob('0 5 6 * * *', 'vlb-settlement', async () => {
+  await runJob('vlb-settlement', accraDateKey(), () => runVlbSettlement());
+});
+
+scheduleJob('0 10 6 * * *', 'vlb-renewal-nudge', async () => {
+  await runJob('vlb-renewal-nudge', accraDateKey(), () => runVlbRenewalNudge());
+});
+
 console.log('[jobs] ventech jobs started (Africa/Accra)');
 console.log('[jobs] orphan-uploads 01:15 daily');
 console.log('[jobs] month-end-withdrawals 20:00 last day of month');
+console.log('[jobs] vlb-payouts-due 06:00 daily');
+console.log('[jobs] vlb-settlement 06:05 daily');
+console.log('[jobs] vlb-renewal-nudge 06:10 daily');
 console.log('[jobs] admin-digest 07:30 daily');
 
 async function stop() {

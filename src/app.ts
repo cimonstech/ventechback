@@ -54,6 +54,25 @@ if (process.env.NODE_ENV !== 'production') {
   }
 }
 
+function isPrivateLanOrigin(origin: string): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    const host = url.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') return true;
+    const parts = host.split('.');
+    if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) return false;
+    const [a, b] = parts.map(Number);
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 const rejectedOrigins = new Set<string>();
 
 const corsOptions: CorsOptions = {
@@ -61,7 +80,7 @@ const corsOptions: CorsOptions = {
     // Allow requests with no origin (server-to-server, Paystack webhooks, curl)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.includes(origin) || isPrivateLanOrigin(origin)) {
       return callback(null, true);
     }
 

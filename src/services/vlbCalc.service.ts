@@ -350,6 +350,11 @@ export function termProgress(
   };
 }
 
+export function renewalNudgeDue(today: string, lastTermFinalMonthStart: string): boolean {
+  if (!isIsoDate(today) || !isIsoDate(lastTermFinalMonthStart)) return false;
+  return lastTermFinalMonthStart >= today && lastTermFinalMonthStart <= addDays(today, 7);
+}
+
 export function totals(schedule: ScheduleRow[]): ScheduleTotals {
   const returns = schedule.filter((row) => row.type === 'return');
   const principalRow = schedule.find((row) => row.type === 'principal');

@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 import {
   PlanSnapshot,
   buildSchedule,
+  renewalNudgeDue,
+  termProgress,
   totals,
 } from './vlbCalc.service';
 
@@ -187,5 +189,16 @@ describe('buildSchedule', () => {
     assert.equal(returns[3].gross_pesewas, 90_000);
     assert.equal(returns[3].scholar_pesewas, 900);
     assert.equal(returns[8].gross_pesewas, 90_000);
+  });
+});
+
+describe('renewalNudgeDue', () => {
+  it('is true from today through 7 days before the final return month starts', () => {
+    const progress = termProgress(v30(), '2026-01-15', '2026-09-15');
+    assert.equal(progress.last_term_final_month_start, '2026-10-01');
+    assert.equal(renewalNudgeDue('2026-09-24', '2026-10-01'), true);
+    assert.equal(renewalNudgeDue('2026-10-01', '2026-10-01'), true);
+    assert.equal(renewalNudgeDue('2026-09-23', '2026-10-01'), false);
+    assert.equal(renewalNudgeDue('2026-10-02', '2026-10-01'), false);
   });
 });

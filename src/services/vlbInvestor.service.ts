@@ -7,6 +7,8 @@ import { getSignedViewUrl } from './privateStorage.service';
 import { VlbError } from './vlb.service';
 import {
   PlanSnapshot,
+  addMonths,
+  daysBetween,
   snapshotFromPlan,
   termProgress,
   todayAccra,
@@ -187,6 +189,7 @@ export async function loadPayouts(investmentIds: string[]): Promise<PayoutRow[]>
 function summarizeInvestment(investment: InvestmentRow, payouts: PayoutRow[], today: string) {
   const snapshot = snapshotOf(investment);
   const progress = termProgress(snapshot, dateOnly(investment.start_date), today);
+  const horizon = horizonProgress(investment, today);
   const returns = payouts.filter((row) => row.type === 'return');
   const principal = payouts.find((row) => row.type === 'principal');
   const paidReturns = returns.filter((row) => row.status === 'paid');
@@ -234,7 +237,25 @@ function summarizeInvestment(investment: InvestmentRow, payouts: PayoutRow[], to
     renewal_open: progress.renewal_open && (investment.status === 'active' || investment.status === 'settlement'),
     stars_total: Number(investment.stars_total),
     stars_used: Number(investment.stars_used),
+    horizon_months: horizon.months,
+    horizon_progress: {
+      days_elapsed: horizon.days_elapsed,
+      days_total: horizon.days_total,
+    },
   };
+}
+
+function horizonProgress(investment: InvestmentRow, today: string) {
+  const snapshot = snapshotOf(investment);
+  const months = Math.max(
+    1,
+    Number(snapshot.terms_count) * Number(snapshot.months_per_term) + Number(snapshot.settlement_months)
+  );
+  const start = dateOnly(investment.start_date);
+  const end = addMonths(start, months);
+  const daysTotal = Math.max(1, daysBetween(start, end));
+  const daysElapsed = Math.min(daysTotal, Math.max(0, daysBetween(start, today)));
+  return { months, days_elapsed: daysElapsed, days_total: daysTotal };
 }
 
 export async function getInvestorMe(userId: string) {
@@ -257,10 +278,40 @@ export async function getInvestorMe(userId: string) {
     byInvestment.set(payout.investment_id, list);
   }
   const today = todayAccra();
+  const summaries = investments.map((row) => summarizeInvestment(row, byInvestment.get(row.id) || [], today));
+  const live = summaries.filter((row) => row.status === 'active' || row.status === 'settlement');
+  const featured = [...live]
+    .filter((row) => row.next_payout)
+    .sort((a, b) => {
+      const dateCmp = (a.next_payout?.date || '').localeCompare(b.next_payout?.date || '');
+      if (dateCmp !== 0) return dateCmp;
+      return (a.next_payout?.period_no || 0) - (b.next_payout?.period_no || 0);
+    })[0] || live[0] || null;
+  const next = featured?.next_payout || null;
   return {
     investor_no: investor.investor_no,
     payout: presentPayoutDetails(investor, true),
-    investments: investments.map((row) => summarizeInvestment(row, byInvestment.get(row.id) || [], today)),
+    investments: summaries,
+    summary: {
+      total_invested_pesewas: live.reduce((sum, row) => sum + Number(row.principal_pesewas), 0),
+      received_pesewas: summaries.reduce((sum, row) => sum + Number(row.totals_paid_pesewas), 0),
+      scholar_fund_pesewas: summaries.reduce((sum, row) => sum + Number(row.scholar_fund_deducted_pesewas), 0),
+      next_payout: next
+        ? {
+            investment_id: featured?.id || null,
+            date: next.date,
+            net_pesewas: next.net_pesewas,
+          }
+        : null,
+      featured: featured
+        ? {
+            investment_id: featured.id,
+            plan_name: featured.plan_name,
+            horizon_months: featured.horizon_months,
+            horizon_progress: featured.horizon_progress,
+          }
+        : null,
+    },
   };
 }
 
