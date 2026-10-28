@@ -29,6 +29,8 @@ import adminTicketsRoutes from './routes/adminTickets.routes';
 import adminAffiliatesRoutes from './routes/adminAffiliates.routes';
 import vlbRoutes from './routes/vlb.routes';
 import adminVlbRoutes from './routes/adminVlb.routes';
+import featuresRoutes from './routes/features.routes';
+import adminFeaturesRoutes from './routes/adminFeatures.routes';
 import { errorHandler, notFound } from './middleware/error.middleware';
 import { publicRateLimiter } from './middleware/rateLimit.middleware';
 
@@ -130,6 +132,8 @@ app.use('/api/admin/tickets', adminTicketsRoutes);
 app.use('/api/admin/affiliates', adminAffiliatesRoutes);
 app.use('/api/vlb', publicRateLimiter, vlbRoutes);
 app.use('/api/admin/vlb', adminVlbRoutes);
+app.use('/api/features', publicRateLimiter, featuresRoutes);
+app.use('/api/admin/features', adminFeaturesRoutes);
 app.use('/api/admin/audit-log', auditRoutes);
 app.use('/api/admin/staff', staffRoutes);
 app.use('/api/me', accessRoutes);

@@ -136,7 +136,7 @@ export async function createUpload(req: AuthRequest, res: Response) {
     }
 
     try {
-      const previewUrl = await getSignedViewUrl(data.r2_key, 600);
+      const previewUrl = await getSignedViewUrl(data.r2_key);
       return successResponse(res, {
         id: data.id,
         kind: data.kind,
@@ -423,11 +423,12 @@ export async function getMine(req: AuthRequest, res: Response) {
         completed_at, closed_reason,
         issue_type:ticket_issue_types!service_tickets_issue_type_id_fkey(id, name),
         order:orders!service_tickets_order_id_fkey(order_number),
-        events:ticket_events(id, type, from_status, to_status, body, is_internal, actor_role, created_at),
+        events:ticket_events!ticket_events_ticket_id_fkey(id, type, from_status, to_status, body, is_internal, actor_role, created_at),
         media:ticket_media(id, kind, mime, size_bytes, r2_key, created_at)
       `)
       .eq('user_id', userId)
       .eq('ticket_no', ticketNo)
+      .eq('ticket_events.is_internal', false)
       .maybeSingle();
     if (error) {
       logDb('get my ticket', error);

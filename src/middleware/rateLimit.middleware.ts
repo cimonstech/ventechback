@@ -17,25 +17,29 @@ const getIdentifier = (req: Request): string => {
   if ((req as any).user?.id) {
     return `user:${(req as any).user.id}`;
   }
-  
-  // Fall back to IP address
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = forwarded 
-    ? (typeof forwarded === 'string' ? forwarded.split(',')[0] : forwarded[0])
-    : req.ip || req.socket.remoteAddress || 'unknown';
-  
-  return `ip:${ip}`;
+
+  return `ip:${req.ip || 'unknown'}`;
+};
+
+const retryAfterSeconds = (req: Request): number => {
+  const resetTime = (req as any).rateLimit?.resetTime;
+  if (!(resetTime instanceof Date)) {
+    return 1;
+  }
+  return Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000));
 };
 
 // Standard rate limit handler
 const standardHandler = (req: Request, res: Response) => {
   const identifier = getIdentifier(req);
   console.warn(`Rate limit exceeded for ${identifier} on ${req.path}`);
-  
+
+  const seconds = retryAfterSeconds(req);
+  res.setHeader('Retry-After', String(seconds));
   res.status(429).json({
     success: false,
-    message: 'Too many requests. Please try again later.',
-    retryAfter: Math.ceil((req as any).rateLimit.resetTime / 1000),
+    message: 'Too many requests. Please try again in a moment.',
+    retryAfterSeconds: seconds,
   });
 };
 
@@ -177,10 +181,12 @@ export const ticketCreateRateLimiter = rateLimit({
   handler: (req: Request, res: Response) => {
     const identifier = getIdentifier(req);
     console.warn(`Rate limit exceeded for ${identifier} on ${req.path}`);
+    const seconds = retryAfterSeconds(req);
+    res.setHeader('Retry-After', String(seconds));
     res.status(429).json({
       success: false,
-      message: 'You can only submit 5 service requests per day.',
-      retryAfter: Math.ceil((req as any).rateLimit.resetTime / 1000),
+      message: 'Too many requests. Please try again in a moment.',
+      retryAfterSeconds: seconds,
     });
   },
   keyGenerator: getIdentifier,
@@ -197,11 +203,7 @@ export const refClickRateLimiter = rateLimit({
   legacyHeaders: false,
   handler: standardHandler,
   keyGenerator: (req: Request) => {
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = forwarded
-      ? (typeof forwarded === 'string' ? forwarded.split(',')[0] : forwarded[0])
-      : req.ip || req.socket.remoteAddress || 'unknown';
-    return `ip:${String(ip).trim()}`;
+    return `ip:${req.ip || 'unknown'}`;
   },
 });
 

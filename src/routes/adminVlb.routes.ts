@@ -4,9 +4,13 @@ import {
   adminActivateApplication,
   adminCreatePlan,
   adminDeleteDocument,
+  adminGetAgreementTemplate,
   adminGetApplication,
+  adminGetDocument,
   adminGetInvestment,
   adminGetInvestor,
+  adminInvestmentConfirmationPdf,
+  adminInvestmentStatementPdf,
   adminListApplications,
   adminListInvestments,
   adminListInvestors,
@@ -15,7 +19,9 @@ import {
   adminListUpgrades,
   adminMarkPayoutPaid,
   adminPatchApplication,
+  adminPatchInvestorPayout,
   adminPatchUpgrade,
+  adminPayoutReceiptPdf,
   adminPayoutsReport,
   adminPreviewSchedule,
   adminRecordStars,
@@ -25,6 +31,7 @@ import {
   adminSettlementQueue,
   adminSettleInvestment,
   adminUpdatePlan,
+  adminUploadAgreementTemplate,
   adminUploadDocument,
 } from '../controllers/adminVlb.controller';
 import {
@@ -34,12 +41,14 @@ import {
   requireSuperadmin,
   staffHasModuleAccess,
 } from '../middleware/auth.middleware';
+import { requireVlbV3Enabled } from '../middleware/featureFlags.middleware';
 import { uploadRateLimiter } from '../middleware/rateLimit.middleware';
 import { errorResponse } from '../utils/responseHandlers';
 
 const router = Router();
 const view = requirePermission('vlb', 'view');
 const edit = requirePermission('vlb', 'edit');
+const financeEdit = requirePermission('finance', 'edit');
 
 const money = [
   authenticate,
@@ -81,13 +90,16 @@ router.put('/plans/:id', edit, adminUpdatePlan);
 router.get('/applications', view, adminListApplications);
 router.get('/applications/:id', view, adminGetApplication);
 router.patch('/applications/:id', edit, adminPatchApplication);
-router.post('/applications/:id/activate', money, adminActivateApplication);
+router.post('/applications/:id/activate', money, requireVlbV3Enabled, adminActivateApplication);
 
 router.get('/investors', view, adminListInvestors);
 router.get('/investors/:id', view, adminGetInvestor);
+router.patch('/investors/:id/payout', financeEdit, adminPatchInvestorPayout);
 router.post('/investors/:id/documents', edit, uploadRateLimiter, acceptDocument, adminUploadDocument);
 
 router.get('/investments', view, adminListInvestments);
+router.get('/investments/:id/confirmation.pdf', view, adminInvestmentConfirmationPdf);
+router.get('/investments/:id/statement.pdf', view, adminInvestmentStatementPdf);
 router.get('/investments/:id', view, adminGetInvestment);
 router.post('/investments/:id/settle', money, adminSettleInvestment);
 router.post('/investments/:id/renew', money, adminRenewInvestment);
@@ -96,6 +108,7 @@ router.post('/investments/:id/referral-bonus', money, adminReferralBonus);
 
 router.get('/preview-schedule', view, adminPreviewSchedule);
 router.get('/payouts', view, adminListPayouts);
+router.get('/payouts/:id/receipt.pdf', view, adminPayoutReceiptPdf);
 router.post('/payouts/:id/mark-paid', money, adminMarkPayoutPaid);
 
 router.get('/settlement', view, adminSettlementQueue);
@@ -103,6 +116,9 @@ router.get('/settlement', view, adminSettlementQueue);
 router.get('/upgrade-requests', view, adminListUpgrades);
 router.patch('/upgrade-requests/:id', edit, adminPatchUpgrade);
 
+router.get('/agreement-template', view, adminGetAgreementTemplate);
+router.post('/agreement-template', edit, uploadRateLimiter, acceptDocument, adminUploadAgreementTemplate);
+router.get('/documents/:id', view, adminGetDocument);
 router.delete('/documents/:id', requireSuperadmin, adminDeleteDocument);
 
 router.get('/reports/scholar-fund', view, adminScholarFundReport);

@@ -38,7 +38,9 @@ export async function putPrivateObject(key: string, buffer: Buffer, mime: string
   }));
 }
 
-export async function getSignedViewUrl(key: string, seconds = 600): Promise<string> {
+export const SIGNED_VIEW_SECONDS = 120;
+
+export async function getSignedViewUrl(key: string, seconds = SIGNED_VIEW_SECONDS): Promise<string> {
   return getSignedUrl(
     storageClient(),
     new GetObjectCommand({ Bucket: bucket(), Key: key }),

@@ -9,11 +9,15 @@ import { loadPlan, VlbError } from './vlb.service';
 import {
   InvestmentRow,
   InvestorRow,
+  PayoutInput,
   PayoutRow,
+  loadAgreementTemplate,
   loadInvestorById,
   loadPayouts,
   presentPayoutDetails,
   presentPayoutRow,
+  publicAgreementTemplateLink,
+  updateInvestorPayoutByStaff,
 } from './vlbInvestor.service';
 import {
   addDays,
@@ -31,7 +35,7 @@ type AuditReq = Request & { user?: { id?: string; role?: string } };
 const APP_STATUSES = ['new', 'contacted', 'activated', 'declined'] as const;
 const INVESTMENT_STATUSES = ['active', 'settlement', 'settled', 'renewed'] as const;
 const UPGRADE_STATUSES = ['new', 'contacted', 'done', 'declined'] as const;
-const DOC_KINDS = ['agreement', 'receipt', 'statement', 'other'] as const;
+const DOC_KINDS = ['agreement', 'agreement_template', 'receipt', 'statement', 'other'] as const;
 const IMAGE_LIMIT = 10 * 1024 * 1024;
 
 function logDb(scope: string, error: unknown) {
@@ -97,6 +101,31 @@ function snapshotOf(investment: InvestmentRow) {
 function planNameOf(investment: InvestmentRow): string {
   const snap = investment.plan_snapshot as { name?: string };
   return snap?.name || 'Laptop Banking';
+}
+
+async function missingAgreementIds(investments: Array<{ id: string; investor_id: string }>): Promise<Set<string>> {
+  const missing = new Set(investments.map((row) => row.id));
+  if (investments.length === 0) return missing;
+  const investorIds = [...new Set(investments.map((row) => row.investor_id))];
+  const { data, error } = await supabaseAdmin
+    .from('vlb_documents')
+    .select('investor_id, investment_id')
+    .eq('kind', 'agreement')
+    .in('investor_id', investorIds);
+  if (error) {
+    logDb('agreement coverage', error);
+    throw new VlbError(500, 'Could not load documents.');
+  }
+  const blanket = new Set<string>();
+  const byInvestment = new Set<string>();
+  for (const row of data || []) {
+    if (row.investment_id) byInvestment.add(row.investment_id);
+    else if (row.investor_id) blanket.add(row.investor_id);
+  }
+  for (const row of investments) {
+    if (byInvestment.has(row.id) || blanket.has(row.investor_id)) missing.delete(row.id);
+  }
+  return missing;
 }
 
 async function loadInvestment(id: string): Promise<InvestmentRow> {
@@ -244,7 +273,7 @@ export async function getInvestorAdmin(id: string, unmaskPayout: boolean) {
   for (const row of documents || []) {
     let url: string | null = null;
     try {
-      url = await getSignedViewUrl(row.r2_key, 600);
+      url = await getSignedViewUrl(row.r2_key);
     } catch (signError) {
       logDb('sign document', signError);
     }
@@ -261,6 +290,7 @@ export async function getInvestorAdmin(id: string, unmaskPayout: boolean) {
   }
   const today = todayAccra();
   const list = (investments || []) as InvestmentRow[];
+  const missingAgreement = await missingAgreementIds(list);
   const payouts = await loadPayouts(list.map((row) => row.id));
   const byId = new Map<string, PayoutRow[]>();
   for (const payout of payouts) {
@@ -289,6 +319,7 @@ export async function getInvestorAdmin(id: string, unmaskPayout: boolean) {
         renewal_choice: row.renewal_choice,
         stars_total: Number(row.stars_total),
         stars_used: Number(row.stars_used),
+        agreement_missing: missingAgreement.has(row.id),
       };
     }),
     documents: docs,
@@ -335,6 +366,7 @@ export async function listInvestments(input: {
   }
   const total = input.term ? rows.length : count || 0;
   const pageRows = input.term ? rows.slice(from, from + input.limit) : rows;
+  const missingAgreement = await missingAgreementIds(pageRows);
   return {
     rows: pageRows.map((row) => {
       const progress = termProgress(snapshotOf(row), dateOnly(row.start_date), today);
@@ -350,6 +382,7 @@ export async function listInvestments(input: {
         status: row.status,
         current_term: progress.current_term,
         renewal_choice: row.renewal_choice,
+        agreement_missing: missingAgreement.has(row.id),
       };
     }),
     total,
@@ -382,6 +415,7 @@ export async function getInvestmentAdmin(id: string) {
   }
   const today = todayAccra();
   const progress = termProgress(snapshotOf(investment), dateOnly(investment.start_date), today);
+  const missingAgreement = await missingAgreementIds([investment]);
   return {
     ...investment,
     principal_pesewas: Number(investment.principal_pesewas),
@@ -389,6 +423,7 @@ export async function getInvestmentAdmin(id: string) {
     maturity_date: dateOnly(investment.maturity_date),
     plan_name: planNameOf(investment),
     investor_no: investor.investor_no,
+    agreement_missing: missingAgreement.has(investment.id),
     current_term: progress.current_term,
     term_progress: {
       days_elapsed: progress.days_elapsed,
@@ -417,13 +452,17 @@ export async function listPayoutQueue(input: {
   range: 'this_week' | 'overdue' | 'due' | 'all' | 'paid';
   page: number;
   limit: number;
+  includePayoutDetails?: boolean;
 }) {
   const today = todayAccra();
   const from = (input.page - 1) * input.limit;
   const to = from + input.limit - 1;
+  const investorSelect = input.includePayoutDetails
+    ? 'investor_no, payout_method, momo_network, momo_number, bank_name, bank_account_name, bank_account_number'
+    : 'investor_no';
   let query = supabaseAdmin
     .from('vlb_payouts')
-    .select('*, vlb_investments(id, status, renewal_choice, investor_id, plan_snapshot, investors(investor_no))', { count: 'exact' });
+    .select(`*, vlb_investments(id, status, renewal_choice, investor_id, plan_snapshot, investors(${investorSelect}))`, { count: 'exact' });
 
   if (input.range === 'due') {
     query = query.eq('status', 'due').order('due_date', { ascending: true });
@@ -444,7 +483,20 @@ export async function listPayoutQueue(input: {
     logDb('payout queue', error);
     throw new VlbError(500, 'Could not load payouts.');
   }
-  return { rows: data || [], total: count || 0 };
+  const rows = (data || []).map((row) => {
+    if (!input.includePayoutDetails) return { ...row, payout_details: null };
+    const investment = Array.isArray(row.vlb_investments) ? row.vlb_investments[0] : row.vlb_investments;
+    const investor = investment?.investors
+      ? (Array.isArray(investment.investors) ? investment.investors[0] : investment.investors)
+      : null;
+    return {
+      ...row,
+      payout_details: investor
+        ? presentPayoutDetails(investor as InvestorRow, false)
+        : null,
+    };
+  });
+  return { rows, total: count || 0 };
 }
 
 export async function markPayoutPaid(
@@ -832,6 +884,9 @@ export async function uploadInvestorDocument(
     investment_id?: string | null;
   }
 ) {
+  if (input.kind === 'agreement_template') {
+    throw new VlbError(400, 'Use the agreement template setting to upload that file.');
+  }
   const investor = await loadInvestorById(investorId);
   const detected = detectTicketFile(input.file.buffer);
   if (!detected || detected.group === 'video') {
@@ -879,6 +934,13 @@ export async function uploadInvestorDocument(
     throw new VlbError(500, 'Could not store this file.');
   }
 
+  await replaceMatchingDocuments({
+    investorId: investor.id,
+    investmentId: input.investment_id || null,
+    kind: input.kind,
+    keepId: data.id,
+  });
+
   await logAudit({
     req,
     entity: 'vlb_documents',
@@ -889,7 +951,7 @@ export async function uploadInvestorDocument(
 
   let url: string | null = null;
   try {
-    url = await getSignedViewUrl(data.r2_key, 600);
+    url = await getSignedViewUrl(data.r2_key);
   } catch (signError) {
     logDb('sign uploaded document', signError);
   }
@@ -905,6 +967,168 @@ export async function uploadInvestorDocument(
     url,
   };
 }
+
+async function replaceMatchingDocuments(input: {
+  investorId: string | null;
+  investmentId: string | null;
+  kind: string;
+  keepId: string;
+}) {
+  let query = supabaseAdmin
+    .from('vlb_documents')
+    .select('id, r2_key')
+    .eq('kind', input.kind)
+    .neq('id', input.keepId);
+  if (input.investorId) query = query.eq('investor_id', input.investorId);
+  else query = query.is('investor_id', null);
+  if (input.investmentId) query = query.eq('investment_id', input.investmentId);
+  else query = query.is('investment_id', null);
+  const { data, error } = await query;
+  if (error) {
+    logDb('replace documents', error);
+    return;
+  }
+  for (const row of data || []) {
+    const { error: deleteError } = await supabaseAdmin.from('vlb_documents').delete().eq('id', row.id);
+    if (deleteError) {
+      logDb('replace document row', deleteError);
+      continue;
+    }
+    try {
+      await deletePrivateObject(row.r2_key);
+    } catch (storageError) {
+      logDb('replace document storage', storageError);
+    }
+  }
+}
+
+export async function getAgreementTemplateAdmin() {
+  try {
+    return await publicAgreementTemplateLink();
+  } catch (error) {
+    if (error instanceof VlbError && error.statusCode === 404) return null;
+    throw error;
+  }
+}
+
+export async function uploadAgreementTemplate(
+  req: AuditReq,
+  input: { file: { buffer: Buffer; size: number }; title?: string }
+) {
+  const detected = detectTicketFile(input.file.buffer);
+  if (!detected || detected.group !== 'pdf') {
+    throw new VlbError(400, 'Upload a PDF.');
+  }
+  if (input.file.size > IMAGE_LIMIT) {
+    throw new VlbError(400, 'Files must be 10 MB or smaller.');
+  }
+  const key = `vlb/templates/${randomUUID()}.pdf`;
+  try {
+    await putPrivateObject(key, input.file.buffer, detected.mime);
+  } catch (error) {
+    logDb('template store', error);
+    throw new VlbError(500, 'Could not store this file.');
+  }
+  const existing = await loadAgreementTemplate();
+  const title = (input.title || 'Laptop Banking agreement').trim();
+  const { data, error } = existing
+    ? await supabaseAdmin
+      .from('vlb_documents')
+      .update({
+        title,
+        r2_key: key,
+        mime: detected.mime,
+        size_bytes: input.file.size,
+        uploaded_by: req.user?.id || null,
+      })
+      .eq('id', existing.id)
+      .select('id, investor_id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
+      .single()
+    : await supabaseAdmin
+      .from('vlb_documents')
+      .insert({
+        investor_id: null,
+        investment_id: null,
+        kind: 'agreement_template',
+        title,
+        r2_key: key,
+        mime: detected.mime,
+        size_bytes: input.file.size,
+        uploaded_by: req.user?.id || null,
+      })
+      .select('id, investor_id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
+      .single();
+  if (error || !data) {
+    logDb('template upsert', error);
+    try {
+      await deletePrivateObject(key);
+    } catch (cleanup) {
+      logDb('template cleanup', cleanup);
+    }
+    throw new VlbError(500, 'Could not store this file.');
+  }
+  if (existing?.r2_key && existing.r2_key !== key) {
+    try {
+      await deletePrivateObject(existing.r2_key);
+    } catch (storageError) {
+      logDb('template replace storage', storageError);
+    }
+  }
+  await logAudit({
+    req,
+    entity: 'vlb_documents',
+    entityId: data.id,
+    action: 'vlb_agreement_template_uploaded',
+    after: { id: data.id, kind: data.kind, title: data.title },
+  });
+  let url: string | null = null;
+  try {
+    url = await getSignedViewUrl(data.r2_key);
+  } catch (signError) {
+    logDb('sign template', signError);
+  }
+  return {
+    id: data.id,
+    investment_id: data.investment_id,
+    kind: data.kind,
+    title: data.title,
+    mime: data.mime,
+    size_bytes: data.size_bytes,
+    created_at: data.created_at,
+    url,
+  };
+}
+
+export async function signAdminDocument(documentId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('vlb_documents')
+    .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
+    .eq('id', documentId)
+    .maybeSingle();
+  if (error) {
+    logDb('sign admin document', error);
+    throw new VlbError(500, 'Could not load this document.');
+  }
+  if (!data) throw new VlbError(404, 'Document not found.');
+  let url: string | null = null;
+  try {
+    url = await getSignedViewUrl(data.r2_key);
+  } catch (signError) {
+    logDb('sign admin document url', signError);
+  }
+  return {
+    id: data.id,
+    investment_id: data.investment_id,
+    kind: data.kind,
+    title: data.title,
+    mime: data.mime,
+    size_bytes: data.size_bytes,
+    created_at: data.created_at,
+    url,
+  };
+}
+
+export { updateInvestorPayoutByStaff };
 
 export async function deleteInvestorDocument(req: AuditReq, documentId: string) {
   const { data, error } = await supabaseAdmin

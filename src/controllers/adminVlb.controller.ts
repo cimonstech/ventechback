@@ -1,9 +1,11 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
+import pdfService from '../services/pdf.service';
 import {
   applyReferralBonus,
   deleteInvestorDocument,
+  getAgreementTemplateAdmin,
   getApplication,
   getInvestmentAdmin,
   getInvestorAdmin,
@@ -23,8 +25,16 @@ import {
   scholarFundCsv,
   scholarFundReport,
   settleInvestment,
+  signAdminDocument,
+  updateInvestorPayoutByStaff,
+  uploadAgreementTemplate,
   uploadInvestorDocument,
 } from '../services/vlbAdmin.service';
+import {
+  confirmationPayloadAdmin,
+  payoutReceiptPayload,
+  statementPayloadAdmin,
+} from '../services/vlbInvestor.service';
 import {
   VlbError,
   activateApplication,
@@ -64,6 +74,21 @@ const updatePlanSchema = createPlanSchema.partial().refine(
   { message: 'Nothing to update' }
 );
 
+const momoPayoutSchema = z.object({
+  payout_method: z.literal('momo'),
+  momo_network: z.string().trim().min(1).max(40),
+  momo_number: z.string().trim().min(8).max(20),
+});
+
+const bankPayoutSchema = z.object({
+  payout_method: z.literal('bank'),
+  bank_name: z.string().trim().min(1).max(80),
+  bank_account_name: z.string().trim().min(1).max(120),
+  bank_account_number: z.string().trim().min(6).max(32),
+});
+
+const payoutSchema = z.discriminatedUnion('payout_method', [momoPayoutSchema, bankPayoutSchema]);
+
 const activateSchema = z.object({
   email: z.string().trim().email().max(200),
   plan_id: z.uuid(),
@@ -72,6 +97,7 @@ const activateSchema = z.object({
   payment_method: z.string().trim().min(1).max(80),
   payment_reference: z.string().trim().min(1).max(120),
   agreement_signed_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  payout: payoutSchema.optional(),
 });
 
 function formMessage(error: z.ZodError): string {
@@ -140,10 +166,14 @@ export async function adminActivateApplication(req: AuthRequest, res: Response) 
     }
     const parsed = activateSchema.safeParse(req.body);
     if (!parsed.success) return errorResponse(res, formMessage(parsed.error), 400);
+    const { payout, ...activation } = parsed.data;
     const result = await activateApplication(req, id, {
-      ...parsed.data,
+      ...activation,
       allow_principal_override: req.user?.role === 'superadmin',
     });
+    if (payout) {
+      await updateInvestorPayoutByStaff(req, result.investor_id, payout);
+    }
     return successResponse(res, result, 'Investment activated.');
   } catch (error) {
     return fail(res, error, 'Could not activate this investment.');
@@ -329,6 +359,7 @@ export async function adminListPayouts(req: AuthRequest, res: Response) {
       range: range as 'this_week' | 'overdue' | 'due' | 'all' | 'paid',
       page,
       limit,
+      includePayoutDetails: await canSeeFinance(req),
     });
     return paginatedResponse(res, data.rows, {
       page,
@@ -408,6 +439,93 @@ export async function adminReferralBonus(req: AuthRequest, res: Response) {
     return successResponse(res, data, 'Referral bonus applied.');
   } catch (error) {
     return fail(res, error, 'Could not apply this referral bonus.');
+  }
+}
+
+function sendPdf(res: Response, pdf: Buffer, filename: string) {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.status(200).send(pdf);
+}
+
+export async function adminPatchInvestorPayout(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Investor not found.', 404);
+    const parsed = payoutSchema.safeParse(req.body);
+    if (!parsed.success) return errorResponse(res, formMessage(parsed.error), 400);
+    const data = await updateInvestorPayoutByStaff(req, id, parsed.data);
+    return successResponse(res, data, 'Payout details saved.');
+  } catch (error) {
+    return fail(res, error, 'Could not update payout details.');
+  }
+}
+
+export async function adminGetAgreementTemplate(_req: AuthRequest, res: Response) {
+  try {
+    const data = await getAgreementTemplateAdmin();
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load the agreement template.');
+  }
+}
+
+export async function adminUploadAgreementTemplate(req: AuthRequest, res: Response) {
+  try {
+    const file = req.file;
+    if (!file?.buffer?.length) return errorResponse(res, 'Choose a file.', 400);
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const data = await uploadAgreementTemplate(req, { file, title: title || undefined });
+    return successResponse(res, data, 'Agreement template saved.', 201);
+  } catch (error) {
+    return fail(res, error, 'Could not store this file.');
+  }
+}
+
+export async function adminGetDocument(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Document not found.', 404);
+    const data = await signAdminDocument(id);
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load this document.');
+  }
+}
+
+export async function adminInvestmentConfirmationPdf(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Investment not found.', 404);
+    const payload = await confirmationPayloadAdmin(id);
+    const pdf = await pdfService.generateVlbConfirmationPDF(payload);
+    return sendPdf(res, pdf, `vlb-confirmation-${payload.investor_no}.pdf`);
+  } catch (error) {
+    return fail(res, error, 'Could not generate this confirmation.');
+  }
+}
+
+export async function adminInvestmentStatementPdf(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Investment not found.', 404);
+    const payload = await statementPayloadAdmin(id);
+    const pdf = await pdfService.generateVlbStatementPDF(payload);
+    return sendPdf(res, pdf, `vlb-statement-${payload.investor_no}.pdf`);
+  } catch (error) {
+    return fail(res, error, 'Could not generate this statement.');
+  }
+}
+
+export async function adminPayoutReceiptPdf(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Payout not found.', 404);
+    const payload = await payoutReceiptPayload(id);
+    const pdf = await pdfService.generateVlbPayoutReceiptPDF(payload);
+    return sendPdf(res, pdf, `${payload.receipt_no}.pdf`);
+  } catch (error) {
+    return fail(res, error, 'Could not generate this receipt.');
   }
 }
 

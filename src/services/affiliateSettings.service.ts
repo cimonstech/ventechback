@@ -171,6 +171,10 @@ export const affiliateSettings = {
       eligible_category_names: names,
       min_withdrawal_pesewas: settings.withdrawalMinPesewas,
       payout_methods: ['momo', 'bank'] as const,
+      return_window_days: settings.returnWindowDays,
+      payout_change_hold_hours: settings.payoutChangeHoldHours,
+      fee_refund_on_rejection: settings.refundFeeOnRejection,
+      payout_working_days: 3,
     };
   },
   async save(values: Record<string, string>, userId: string): Promise<AffiliateSettings> {

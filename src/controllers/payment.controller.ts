@@ -342,15 +342,15 @@ export class PaymentController {
       } else {
         return res.status(400).json({
           success: false,
-          message: response.data.message || 'Transaction verification failed',
+          message: 'Transaction verification failed',
         });
       }
     } catch (error: any) {
       console.error('Error verifying Paystack transaction:', error);
-      return res.status(500).json({
+      const paystackFailed = Boolean(error?.isAxiosError || error?.response || error?.request);
+      return res.status(paystackFailed ? 502 : 500).json({
         success: false,
-        message: error.response?.data?.message || 'Failed to verify transaction',
-        error: error.message,
+        message: "We couldn't verify this payment. If you were charged, please contact support with your reference.",
       });
     }
   }
@@ -372,9 +372,9 @@ export class PaymentController {
       const signature = req.headers['x-paystack-signature'];
       if (!signature || Array.isArray(signature)) {
         console.error('Missing Paystack signature in webhook');
-        return res.status(400).json({
+        return res.status(401).json({
           success: false,
-          message: 'Missing signature',
+          message: 'Invalid signature',
         });
       }
 
@@ -408,7 +408,13 @@ export class PaymentController {
 
       console.log('Paystack webhook signature verified');
 
-      const event = JSON.parse(rawBody.toString('utf8'));
+      let event: any;
+      try {
+        event = JSON.parse(rawBody.toString('utf8'));
+      } catch (parseError) {
+        console.error('[webhook-unprocessable]', 'unknown', parseError);
+        return res.status(200).json({ received: true });
+      }
       if (event.data && typeof event.data.metadata === 'string') {
         try {
           event.data.metadata = JSON.parse(event.data.metadata);
@@ -422,6 +428,7 @@ export class PaymentController {
         status: event.data?.status,
       });
 
+      const webhookReference = event.data?.reference;
       const webhookPurpose = event.data?.metadata?.purpose;
       if (
         (event.event === 'charge.success' || event.event === 'transaction.success') &&
@@ -431,8 +438,8 @@ export class PaymentController {
           await applyAffiliateFeePaid(req, event.data.reference);
         } catch (feeError) {
           if (feeError instanceof AffiliateError && feeError.statusCode < 500) {
-            console.error('affiliate fee webhook', feeError.message);
-            return res.status(200).json({ success: true, message: 'Webhook processed' });
+            console.error('[webhook-unprocessable]', webhookReference, feeError.message);
+            return res.status(200).json({ received: true });
           }
           console.error('affiliate fee webhook', feeError);
           return res.status(500).json({
@@ -441,6 +448,15 @@ export class PaymentController {
           });
         }
         return res.status(200).json({ success: true, message: 'Webhook processed' });
+      }
+
+      if (
+        (event.event === 'charge.success' || event.event === 'transaction.success') &&
+        webhookPurpose &&
+        webhookPurpose !== 'affiliate_fee'
+      ) {
+        console.error('[webhook-unprocessable]', webhookReference, `unknown purpose ${webhookPurpose}`);
+        return res.status(200).json({ received: true });
       }
 
       // Handle payment.success event
@@ -455,11 +471,8 @@ export class PaymentController {
           const checkoutData = metadata.checkout_data;
           
           if (!checkoutData) {
-            console.error('❌ No checkout data in webhook metadata');
-            return res.status(400).json({
-              success: false,
-              message: 'No checkout data found in metadata',
-            });
+            console.error('[webhook-unprocessable]', webhookReference, 'missing checkout_data');
+            return res.status(200).json({ received: true });
           }
 
           // Import OrderController
@@ -511,8 +524,8 @@ export class PaymentController {
           }
 
           if (orderBodies.length === 0) {
-            console.error('❌ No order items in webhook checkout data');
-            return res.json({ success: false, message: 'No order items in checkout data' });
+            console.error('[webhook-unprocessable]', webhookReference, 'no order items');
+            return res.status(200).json({ received: true });
           }
 
           // Run createOrder without letting it write to Paystack's response
@@ -549,10 +562,20 @@ export class PaymentController {
 
           await maybeCreateCommissionForPayment(req, transaction.reference);
 
-          // 5xx asks Paystack to retry later; anything else is final
           const retry = results.some(({ status }) => status >= 500);
-          return res.status(retry ? 500 : 200).json({
-            success: !retry,
+          if (retry) {
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to process webhook',
+            });
+          }
+          const refused = results.some(({ status }) => status >= 400 && status < 500);
+          if (refused) {
+            console.error('[webhook-unprocessable]', webhookReference, 'order creation refused by validation');
+            return res.status(200).json({ received: true });
+          }
+          return res.status(200).json({
+            success: true,
             message: 'Webhook processed',
           });
 
@@ -566,11 +589,18 @@ export class PaymentController {
       });
     } catch (error: any) {
       console.error('Error handling Paystack webhook:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to process webhook',
-        error: error.message,
-      });
+      const code = String(error?.code || error?.cause?.code || '');
+      const temporary =
+        ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(code) ||
+        /fetch failed|network|timeout|ECONNREFUSED|Could not connect/i.test(String(error?.message || ''));
+      if (temporary) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to process webhook',
+        });
+      }
+      console.error('[webhook-unprocessable]', 'unknown', error);
+      return res.status(200).json({ received: true });
     }
   }
 }

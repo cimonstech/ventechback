@@ -6,6 +6,7 @@ import {
   listPublicPlans,
   submitApplication,
 } from '../services/vlb.service';
+import { publicAgreementTemplateLink } from '../services/vlbInvestor.service';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 
 const applicationSchema = z.object({
@@ -52,5 +53,14 @@ export async function postApplication(req: AuthRequest, res: Response) {
     return successResponse(res, { id: application.id }, 'Application received.', 201);
   } catch (error) {
     return fail(res, error, 'Could not save this application.');
+  }
+}
+
+export async function getPublicAgreementTemplate(_req: AuthRequest, res: Response) {
+  try {
+    const data = await publicAgreementTemplateLink();
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load the agreement template.');
   }
 }

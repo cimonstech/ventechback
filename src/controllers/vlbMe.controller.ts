@@ -5,10 +5,13 @@ import pdfService from '../services/pdf.service';
 import { VlbError } from '../services/vlb.service';
 import {
   chooseRenewal,
+  confirmationPayload,
   createUpgradeRequest,
   getInvestorMe,
   getMyInvestment,
   listMyDocuments,
+  payoutReceiptPayload,
+  signMyDocument,
   statementPayload,
   updateInvestorPayout,
 } from '../services/vlbInvestor.service';
@@ -114,17 +117,56 @@ export async function getVlbMyDocuments(req: AuthRequest, res: Response) {
   }
 }
 
+export async function getVlbMyDocument(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Document not found.', 404);
+    const data = await signMyDocument(userId(req), id);
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load this document.');
+  }
+}
+
+function sendPdf(res: Response, pdf: Buffer, filename: string) {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.status(200).send(pdf);
+}
+
 export async function getVlbStatementPdf(req: AuthRequest, res: Response) {
   try {
     const id = routeId(req.params.id);
     if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Investment not found.', 404);
     const payload = await statementPayload(userId(req), id);
     const pdf = await pdfService.generateVlbStatementPDF(payload);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="vlb-statement-${payload.investor_no}.pdf"`);
-    return res.status(200).send(pdf);
+    return sendPdf(res, pdf, `vlb-statement-${payload.investor_no}.pdf`);
   } catch (error) {
     return fail(res, error, 'Could not generate this statement.');
+  }
+}
+
+export async function getVlbConfirmationPdf(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Investment not found.', 404);
+    const payload = await confirmationPayload(userId(req), id);
+    const pdf = await pdfService.generateVlbConfirmationPDF(payload);
+    return sendPdf(res, pdf, `vlb-confirmation-${payload.investor_no}.pdf`);
+  } catch (error) {
+    return fail(res, error, 'Could not generate this confirmation.');
+  }
+}
+
+export async function getVlbPayoutReceiptPdf(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Payout not found.', 404);
+    const payload = await payoutReceiptPayload(id, userId(req));
+    const pdf = await pdfService.generateVlbPayoutReceiptPDF(payload);
+    return sendPdf(res, pdf, `${payload.receipt_no}.pdf`);
+  } catch (error) {
+    return fail(res, error, 'Could not generate this receipt.');
   }
 }
 

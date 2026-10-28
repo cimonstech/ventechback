@@ -1,7 +1,5 @@
 import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
-import axios from 'axios';
+import { drawFooter, drawHeader, drawHeaderFallback, PDF_BRAND } from './pdfBrand';
 
 interface OrderData {
   id: string;
@@ -51,8 +49,170 @@ interface OrderData {
   }>;
 }
 
+function ghsPesewas(pesewas: number): string {
+  return `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
+}
+
+function monthLabel(date: string): string {
+  if (!date) return '—';
+  const parsed = new Date(`${date.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+export interface VlbStatementPdfInput {
+  investor_name: string;
+  investor_no: string;
+  plan_name: string;
+  principal_pesewas: number;
+  start_date: string;
+  maturity_date: string;
+  status: string;
+  principal_status: string;
+  remaining_payouts: number;
+  payouts: Array<{
+    type: string;
+    term_no: number | null;
+    period_no: number;
+    due_date: string;
+    gross_pesewas: number;
+    scholar_pesewas: number;
+    net_pesewas: number;
+    status: string;
+    paid_at: string | null;
+    reference: string | null;
+  }>;
+  totals: {
+    paid_net_pesewas: number;
+    scholar_pesewas: number;
+    scheduled_net_pesewas: number;
+  };
+}
+
+export interface VlbConfirmationPdfInput {
+  investor_name: string;
+  investor_no: string;
+  plan_name: string;
+  principal_pesewas: number;
+  start_date: string;
+  maturity_date: string;
+  payment_method: string | null;
+  payment_reference: string | null;
+  agreement_signed_at: string | null;
+  principal_settlement_month: string;
+  total_net_pesewas: number;
+  payouts: VlbStatementPdfInput['payouts'];
+}
+
+export interface VlbPayoutReceiptPdfInput {
+  receipt_no: string;
+  investor_name: string;
+  investor_no: string;
+  plan_name: string;
+  period_label: string;
+  due_date: string;
+  paid_at: string | null;
+  gross_pesewas: number;
+  scholar_pesewas: number;
+  net_pesewas: number;
+  method: string | null;
+  reference: string | null;
+}
+
 class PDFService {
   private currentY: number = 0; // Track current Y position across methods
+
+  private withBrandedDoc(
+    title: string,
+    subtitle: Array<[string, string]>,
+    draw: (doc: PDFKit.PDFDocument, startY: number) => void
+  ): Promise<Buffer> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ margin: 40, size: 'A4', bufferPages: true });
+        const buffers: Buffer[] = [];
+        doc.on('data', (chunk: Buffer) => buffers.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(buffers)));
+        doc.on('error', reject);
+
+        let startY = 166;
+        try {
+          startY = await drawHeader(doc, title, subtitle);
+        } catch (error) {
+          console.warn('Failed to load logo, using text fallback:', error);
+          startY = drawHeaderFallback(doc, title);
+        }
+        draw(doc, startY);
+        drawFooter(doc, doc.y);
+        doc.end();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  private drawKv(doc: PDFKit.PDFDocument, lines: Array<[string, string]>) {
+    doc.fontSize(11).fillColor(PDF_BRAND.body);
+    for (const [label, value] of lines) {
+      if (doc.y > 720) doc.addPage();
+      doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
+      doc.font('Helvetica').text(value);
+      doc.moveDown(0.35);
+    }
+  }
+
+  private drawSummaryBox(doc: PDFKit.PDFDocument, items: Array<[string, string]>) {
+    const boxX = 40;
+    const boxY = doc.y;
+    const boxWidth = 515;
+    const rowH = 16;
+    const boxHeight = 16 + items.length * rowH + 10;
+    if (boxY + boxHeight > 720) {
+      doc.addPage();
+    }
+    const y = doc.y;
+    doc.roundedRect(boxX, y, boxWidth, boxHeight, 4)
+      .lineWidth(1)
+      .strokeColor(PDF_BRAND.line)
+      .stroke();
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(PDF_BRAND.dark).text('Summary', boxX + 12, y + 8);
+    let rowY = y + 26;
+    items.forEach(([label, value]) => {
+      doc.font('Helvetica').fontSize(9).fillColor(PDF_BRAND.muted).text(label, boxX + 12, rowY);
+      doc.fillColor(PDF_BRAND.dark).text(value, boxX + 12, rowY, { width: boxWidth - 24, align: 'right' });
+      rowY += rowH;
+    });
+    doc.y = y + boxHeight + 14;
+  }
+
+  private drawPayoutTable(doc: PDFKit.PDFDocument, payouts: VlbStatementPdfInput['payouts']) {
+    const col = { due: 40, type: 110, period: 170, gross: 222, scholar: 292, net: 362, status: 432 };
+    const drawRow = (row: string[], bold = false) => {
+      if (doc.y > 720) doc.addPage();
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(PDF_BRAND.body);
+      doc.text(row[0], col.due, doc.y, { width: 66, continued: false });
+      const y = doc.y - doc.currentLineHeight();
+      doc.text(row[1], col.type, y, { width: 56 });
+      doc.text(row[2], col.period, y, { width: 48 });
+      doc.text(row[3], col.gross, y, { width: 66 });
+      doc.text(row[4], col.scholar, y, { width: 66 });
+      doc.text(row[5], col.net, y, { width: 66 });
+      doc.text(row[6], col.status, y, { width: 90 });
+      doc.moveDown(0.55);
+    };
+    drawRow(['Due', 'Type', 'Period', 'Gross', 'Scholar', 'Net', 'Status'], true);
+    for (const payout of payouts) {
+      drawRow([
+        payout.due_date,
+        payout.type,
+        String(payout.period_no),
+        ghsPesewas(payout.gross_pesewas),
+        ghsPesewas(payout.scholar_pesewas),
+        ghsPesewas(payout.net_pesewas),
+        payout.status,
+      ]);
+    }
+  }
 
   async generateTicketReceiptPDF(input: {
     ticket_no: string;
@@ -64,20 +224,10 @@ class PDFService {
     phone: string;
     email: string;
   }): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 48, size: 'A4' });
-      const buffers: Buffer[] = [];
-      doc.on('data', (chunk: Buffer) => buffers.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
-      doc.on('error', reject);
-
-      doc.fontSize(20).fillColor('#1A1A1A').text('VENTECH Gadgets', { align: 'left' });
-      doc.moveDown(0.3);
-      doc.fontSize(14).text('Service payment receipt');
-      doc.moveDown();
-      doc.fontSize(11).fillColor('#3A3A3A');
+    return this.withBrandedDoc('SERVICE PAYMENT RECEIPT', [['Ticket', input.ticket_no]], (doc, startY) => {
+      doc.y = startY;
+      doc.fontSize(11).fillColor(PDF_BRAND.body);
       const lines = [
-        ['Ticket', input.ticket_no],
         ['Laptop', input.laptop_model],
         ['Amount', `GHS ${Number(input.amount).toFixed(2)}`],
         ['Method', input.method],
@@ -90,104 +240,93 @@ class PDFService {
         doc.font('Helvetica').text(value);
         doc.moveDown(0.4);
       }
-      doc.end();
     });
   }
 
-  async generateVlbStatementPDF(input: {
-    investor_name: string;
-    investor_no: string;
-    plan_name: string;
-    principal_pesewas: number;
-    start_date: string;
-    maturity_date: string;
-    status: string;
-    payouts: Array<{
-      type: string;
-      term_no: number | null;
-      period_no: number;
-      due_date: string;
-      gross_pesewas: number;
-      scholar_pesewas: number;
-      net_pesewas: number;
-      status: string;
-      paid_at: string | null;
-      reference: string | null;
-    }>;
-    totals: {
-      paid_net_pesewas: number;
-      scholar_pesewas: number;
-      scheduled_net_pesewas: number;
-    };
-  }): Promise<Buffer> {
-    const ghs = (pesewas: number) => `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
-    return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 48, size: 'A4' });
-      const buffers: Buffer[] = [];
-      doc.on('data', (chunk: Buffer) => buffers.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
-      doc.on('error', reject);
-
-      doc.fontSize(20).fillColor('#1A1A1A').text('VENTECH Gadgets');
-      doc.moveDown(0.2);
-      doc.fontSize(14).fillColor('#FF7A19').text('Laptop Banking statement');
-      doc.moveDown();
-      doc.fontSize(11).fillColor('#3A3A3A');
-      const header = [
+  async generateVlbStatementPDF(input: VlbStatementPdfInput): Promise<Buffer> {
+    return this.withBrandedDoc(
+      'LAPTOP BANKING STATEMENT',
+      [
         ['Investor', `${input.investor_name} (${input.investor_no})`],
         ['Plan', input.plan_name],
-        ['Principal', ghs(input.principal_pesewas)],
-        ['Start', input.start_date],
-        ['Maturity', input.maturity_date],
-        ['Status', input.status],
-      ];
-      for (const [label, value] of header) {
-        doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
-        doc.font('Helvetica').text(value);
-        doc.moveDown(0.3);
+      ],
+      (doc, startY) => {
+        doc.y = startY;
+        this.drawSummaryBox(doc, [
+          ['Principal', ghsPesewas(input.principal_pesewas)],
+          ['Paid to date', ghsPesewas(input.totals.paid_net_pesewas)],
+          ['Scholar Fund to date', ghsPesewas(input.totals.scholar_pesewas)],
+          ['Remaining payouts', String(input.remaining_payouts)],
+          ['Principal status', input.principal_status],
+        ]);
+        this.drawKv(doc, [
+          ['Start', input.start_date],
+          ['Maturity', input.maturity_date],
+          ['Status', input.status],
+        ]);
+        doc.moveDown(0.6);
+        doc.font('Helvetica-Bold').fontSize(12).fillColor(PDF_BRAND.dark).text('Schedule');
+        doc.moveDown(0.4);
+        this.drawPayoutTable(doc, input.payouts);
+        if (doc.y > 720) doc.addPage();
+        doc.moveDown();
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_BRAND.dark);
+        doc.text(`Paid so far (net): ${ghsPesewas(input.totals.paid_net_pesewas)}`);
+        doc.text(`Scholar Fund deducted: ${ghsPesewas(input.totals.scholar_pesewas)}`);
+        doc.text(`Remaining scheduled (net): ${ghsPesewas(input.totals.scheduled_net_pesewas)}`);
       }
+    );
+  }
 
-      doc.moveDown(0.6);
-      doc.font('Helvetica-Bold').fontSize(12).fillColor('#1A1A1A').text('Schedule');
-      doc.moveDown(0.4);
-      doc.font('Helvetica').fontSize(9).fillColor('#3A3A3A');
+  async generateVlbConfirmationPDF(input: VlbConfirmationPdfInput): Promise<Buffer> {
+    return this.withBrandedDoc(
+      'INVESTMENT CONFIRMATION',
+      [
+        ['Investor', `${input.investor_name} (${input.investor_no})`],
+        ['Plan', input.plan_name],
+      ],
+      (doc, startY) => {
+        doc.y = startY;
+        this.drawKv(doc, [
+          ['Principal', ghsPesewas(input.principal_pesewas)],
+          ['Start', input.start_date],
+          ['Maturity', input.maturity_date],
+          ['Payment method', input.payment_method || '—'],
+          ['Payment reference', input.payment_reference || '—'],
+          ['Agreement signed', input.agreement_signed_at || '—'],
+          ['Principal settlement month', monthLabel(input.principal_settlement_month || input.maturity_date)],
+          ['Total net', ghsPesewas(input.total_net_pesewas)],
+        ]);
+        doc.moveDown(0.6);
+        doc.font('Helvetica-Bold').fontSize(12).fillColor(PDF_BRAND.dark).text('Payout schedule');
+        doc.moveDown(0.4);
+        this.drawPayoutTable(doc, input.payouts);
+      }
+    );
+  }
 
-      const col = { due: 48, type: 118, period: 178, gross: 230, scholar: 300, net: 370, status: 440 };
-      const drawRow = (row: string[], bold = false) => {
-        if (doc.y > 760) doc.addPage();
-        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica');
-        doc.text(row[0], col.due, doc.y, { width: 66, continued: false });
-        const y = doc.y - doc.currentLineHeight();
-        doc.text(row[1], col.type, y, { width: 56 });
-        doc.text(row[2], col.period, y, { width: 48 });
-        doc.text(row[3], col.gross, y, { width: 66 });
-        doc.text(row[4], col.scholar, y, { width: 66 });
-        doc.text(row[5], col.net, y, { width: 66 });
-        doc.text(row[6], col.status, y, { width: 90 });
-        doc.moveDown(0.55);
-      };
-
-      drawRow(['Due', 'Type', 'Period', 'Gross', 'Scholar', 'Net', 'Status'], true);
-      for (const payout of input.payouts) {
-        drawRow([
-          payout.due_date,
-          payout.type,
-          String(payout.period_no),
-          ghs(payout.gross_pesewas),
-          ghs(payout.scholar_pesewas),
-          ghs(payout.net_pesewas),
-          payout.status,
+  async generateVlbPayoutReceiptPDF(input: VlbPayoutReceiptPdfInput): Promise<Buffer> {
+    return this.withBrandedDoc(
+      'PAYOUT RECEIPT',
+      [
+        ['Receipt', input.receipt_no],
+        ['Investor', `${input.investor_name} (${input.investor_no})`],
+      ],
+      (doc, startY) => {
+        doc.y = startY;
+        this.drawKv(doc, [
+          ['Plan', input.plan_name],
+          ['Period', input.period_label],
+          ['Due date', input.due_date],
+          ['Paid date', input.paid_at ? new Date(input.paid_at).toLocaleDateString('en-GB') : '—'],
+          ['Gross', ghsPesewas(input.gross_pesewas)],
+          ['Scholar Fund', ghsPesewas(input.scholar_pesewas)],
+          ['Net', ghsPesewas(input.net_pesewas)],
+          ['Method', input.method || '—'],
+          ['Reference', input.reference || '—'],
         ]);
       }
-
-      if (doc.y > 720) doc.addPage();
-      doc.moveDown();
-      doc.font('Helvetica-Bold').fontSize(11).fillColor('#1A1A1A');
-      doc.text(`Paid so far (net): ${ghs(input.totals.paid_net_pesewas)}`);
-      doc.text(`Scholar Fund deducted: ${ghs(input.totals.scholar_pesewas)}`);
-      doc.text(`Remaining scheduled (net): ${ghs(input.totals.scheduled_net_pesewas)}`);
-      doc.end();
-    });
+    );
   }
 
   async generateOrderPDF(orderData: OrderData): Promise<Buffer> {
@@ -255,135 +394,22 @@ class PDFService {
   }
 
   private async addHeader(doc: any, orderData?: OrderData) {
-    try {
-      // Download logo from R2 - use PNG format (PDFKit supports PNG, JPEG, GIF)
-      // Construct R2 URL: Use custom domain or R2.dev format
-      const r2PublicUrl = process.env.R2_PUBLIC_URL || process.env.NEXT_PUBLIC_IMAGES_URL || process.env.IMAGES_URL;
-      const r2AccountId = process.env.R2_ACCOUNT_ID;
-      
-      // Use direct logo URL
-      const logoUrl = 'https://files.ventechgadgets.com/ventech_logo_1.png';
-      
-      console.log('Downloading logo from:', logoUrl);
-      const logoResponse = await axios.get(logoUrl, { 
-        responseType: 'arraybuffer',
-        timeout: 10000, // 10 second timeout
-        headers: {
-          'Accept': 'image/png,image/jpeg,image/gif,*/*'
-        }
-      });
-      const logoBuffer = Buffer.from(logoResponse.data);
-      
-      // Verify the file is not WebP format (check magic bytes)
-      // WebP files start with: RIFF (4 bytes) + file size (4 bytes) + WEBP (4 bytes)
-      const fileSignature = logoBuffer.toString('ascii', 0, 12);
-      if (fileSignature.startsWith('RIFF') && fileSignature.includes('WEBP')) {
-        throw new Error('WebP format detected. Please ensure the logo file is PNG format.');
-      }
-      
-      // Check Content-Type header if available
-      const contentType = String(logoResponse.headers['content-type'] ?? '');
-      if (contentType.includes('webp')) {
-        throw new Error(`Content-Type indicates WebP format: ${contentType}. Please ensure the logo file is PNG format.`);
-      }
-      
-      // Add logo image - 30% smaller (150 * 0.7 = 105)
-      // PDFKit supports PNG, JPEG, GIF formats
-      // Using width only to maintain aspect ratio automatically (height will scale proportionally)
-      doc.image(logoBuffer, 40, 40, { width: 105 });
-    } catch (error) {
-      // If logo fails, use fallback
-      throw error;
-    }
-
-    // Document Title - centered between logo and contact info
     const docTitle = orderData?.is_pre_order ? 'PRE-ORDER INVOICE' : 'INVOICE';
-    const titleX = 40 + 105 + 20; // Logo width (105) + spacing (20)
-    const titleY = 50; // Align with top of logo/contact
-    const titleWidth = 380 - titleX - 20; // Space between logo and contact info
-    
-    doc.fontSize(18) // Reduced from 24
-       .fillColor('#1A1A1A')
-       .font('Helvetica-Bold')
-       .text(docTitle, titleX, titleY, { width: titleWidth, align: 'center' })
-       .font('Helvetica');
-
-    // Contact information on right side
-    const contactX = 380;
-    doc.fontSize(8) // Reduced from 9
-       .fillColor('#666666')
-       .text('Email:', contactX, 45)
-       .fontSize(8) // Reduced from 9
-       .fillColor('#FF7A19')
-       .text('support@ventechgadgets.com', contactX, 56, { link: 'mailto:support@ventechgadgets.com' })
-       .fontSize(8) // Reduced from 9
-       .fillColor('#666666')
-       .text('Phone:', contactX, 70)
-       .fontSize(8) // Reduced from 9
-       .fillColor('#1A1A1A')
-       .text('+233 55 134 4310', contactX, 81)
-       .fontSize(8) // Reduced from 9
-       .fillColor('#666666')
-       .text('Website:', contactX, 95)
-       .fontSize(8) // Reduced from 9
-       .fillColor('#FF7A19')
-       .text('www.ventechgadgets.com', contactX, 106, { link: 'https://www.ventechgadgets.com' });
-
-    // Order number and date below header
-    const infoY = 120; // Reduced spacing
-    doc.fontSize(8) // Reduced from 9
-       .fillColor('#666666')
-       .text('Order Number: ', 40, infoY, { continued: true })
-       .fontSize(9) // Reduced from 10
-       .fillColor('#1A1A1A')
-       .font('Helvetica-Bold')
-       .text(orderData?.order_number || 'N/A')
-       .font('Helvetica')
-       .fontSize(8) // Reduced from 9
-       .fillColor('#666666')
-       .text('Order Date: ', 40, infoY + 12, { continued: true })
-       .fontSize(9) // Reduced from 10
-       .fillColor('#1A1A1A')
-       .text(orderData ? new Date(orderData.created_at).toLocaleDateString('en-US', { 
-         year: 'numeric', 
-         month: 'long', 
-         day: 'numeric' 
-       }) : '');
-
-    // Pre-Order Badge removed - no black rectangle
-
-    // Decorative line separator with better styling
-    const separatorY = infoY + 30; // Reduced spacing
-    doc.moveTo(40, separatorY)
-       .lineTo(555, separatorY)
-       .lineWidth(2)
-       .strokeColor('#FF7A19')
-       .stroke()
-       .lineWidth(1);
+    await drawHeader(doc, docTitle, [
+      ['Order Number', orderData?.order_number || 'N/A'],
+      ['Order Date', orderData
+        ? new Date(orderData.created_at).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        : ''],
+    ]);
   }
 
   private addHeaderFallback(doc: any, orderData?: OrderData) {
-    // Fallback to text if logo fails to load
-    doc.fontSize(24)
-       .fillColor('#FF7A19')
-       .text('VENTECH', 50, 50)
-       .fontSize(12)
-       .fillColor('#3A3A3A')
-       .text('Gadgets & Electronics', 50, 80);
-
-    // Document Title
     const docTitle = orderData?.is_pre_order ? 'PRE-ORDER INVOICE' : 'ORDER INVOICE';
-    doc.fontSize(18)
-       .fillColor('#1A1A1A')
-       .text(docTitle, 50, 120);
-
-    // Pre-Order Badge removed - no black rectangle
-
-    // Line separator
-    const separatorY = orderData?.is_pre_order ? 170 : 150;
-    doc.moveTo(50, separatorY)
-       .lineTo(550, separatorY)
-       .stroke('#EDEDED');
+    drawHeaderFallback(doc, docTitle, Boolean(orderData?.is_pre_order));
   }
 
   private addOrderInfo(doc: any, orderData: OrderData) {
@@ -690,42 +716,7 @@ class PDFService {
   }
 
   private addFooter(doc: any, contentEndY: number) {
-    // Position footer at the absolute bottom of the page
-    // A4 page height is 792 points, margin is 40, so bottom is at ~752
-    const pageHeight = 792;
-    const margin = 40;
-    const footerBottomY = pageHeight - margin; // ~752
-    
-    // Position footer content as close to bottom as possible
-    // Calculate from bottom up
-    const brandingY = footerBottomY - 5; // Very bottom, just 5 points from edge
-    const supportY = brandingY - 8; // 8 points above branding
-    const thankYouY = supportY - 10; // 10 points above support
-    const dividerY = thankYouY - 8; // 8 points above thank you message
-    
-    // Footer divider
-    doc.moveTo(40, dividerY)
-       .lineTo(555, dividerY)
-       .lineWidth(1)
-       .strokeColor('#E5E7EB')
-       .stroke();
-    
-    // Thank you message
-    doc.fontSize(9)
-       .fillColor('#1A1A1A')
-       .font('Helvetica-Bold')
-       .text('Thank you for choosing VENTECH!', 40, thankYouY, { align: 'center', width: 515 })
-       .font('Helvetica');
-    
-    // Simple footer text
-    doc.fontSize(7)
-       .fillColor('#666666')
-       .text('For support, please contact us using the details above.', 40, supportY, { align: 'center', width: 515 });
-    
-    // Watermark/branding - at the absolute bottom
-    doc.fontSize(6)
-       .fillColor('#CCCCCC')
-       .text('VENTECH Gadgets & Electronics - Trusted for Tech in Ghana', 40, brandingY, { align: 'center', width: 515 });
+    drawFooter(doc, contentEndY);
   }
 
   private formatAddress(address: any): string {

@@ -7,6 +7,7 @@ import { getSignedViewUrl } from './privateStorage.service';
 import { VlbError } from './vlb.service';
 import {
   PlanSnapshot,
+  addDays,
   addMonths,
   daysBetween,
   snapshotFromPlan,
@@ -45,6 +46,9 @@ export interface InvestmentRow {
   extra_rate_percent: number | string;
   stars_total: number;
   stars_used: number;
+  payment_reference?: string | null;
+  payment_method?: string | null;
+  agreement_signed_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -232,9 +236,12 @@ function summarizeInvestment(investment: InvestmentRow, payouts: PayoutRow[], to
           paid_at: principal.paid_at,
         }
       : null,
+    scholar_fund_percent: Number(snapshot.scholar_fund_percent),
+    scholar_fund_basis: snapshot.scholar_fund_basis,
     renewal_choice: investment.renewal_choice,
     renewal_chosen_at: investment.renewal_chosen_at,
     renewal_open: progress.renewal_open && (investment.status === 'active' || investment.status === 'settlement'),
+    renewal_deadline: addDays(progress.settlement_month_start, -1),
     stars_total: Number(investment.stars_total),
     stars_used: Number(investment.stars_used),
     horizon_months: horizon.months,
@@ -242,6 +249,17 @@ function summarizeInvestment(investment: InvestmentRow, payouts: PayoutRow[], to
       days_elapsed: horizon.days_elapsed,
       days_total: horizon.days_total,
     },
+    paid_payouts: payouts
+      .filter((row) => row.status === 'paid')
+      .sort((a, b) => String(b.paid_at || b.due_date).localeCompare(String(a.paid_at || a.due_date)))
+      .map((row) => ({
+        id: row.id,
+        type: row.type,
+        period_no: row.period_no,
+        due_date: dateOnly(row.due_date),
+        paid_at: row.paid_at,
+        net_pesewas: Number(row.net_pesewas),
+      })),
   };
 }
 
@@ -524,37 +542,94 @@ export async function createUpgradeRequest(
   return data;
 }
 
-export async function listMyDocuments(userId: string) {
-  const investor = await ownInvestor(userId);
+async function presentDocumentRow(row: {
+  id: string;
+  investment_id: string | null;
+  kind: string;
+  title: string;
+  mime: string;
+  size_bytes: number;
+  created_at: string;
+  r2_key: string;
+}) {
+  let url: string | null = null;
+  try {
+    url = await getSignedViewUrl(row.r2_key);
+  } catch (signError) {
+    logDb('sign document', signError);
+  }
+  return {
+    id: row.id,
+    investment_id: row.investment_id,
+    kind: row.kind,
+    title: row.title,
+    mime: row.mime,
+    size_bytes: row.size_bytes,
+    created_at: row.created_at,
+    url,
+  };
+}
+
+export async function loadAgreementTemplate() {
   const { data, error } = await supabaseAdmin
     .from('vlb_documents')
     .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
-    .eq('investor_id', investor.id)
-    .order('created_at', { ascending: false });
+    .eq('kind', 'agreement_template')
+    .is('investor_id', null)
+    .maybeSingle();
+  if (error) {
+    logDb('load agreement template', error);
+    throw new VlbError(500, 'Could not load the agreement template.');
+  }
+  return data;
+}
+
+export async function publicAgreementTemplateLink() {
+  const row = await loadAgreementTemplate();
+  if (!row) throw new VlbError(404, 'Agreement template is not available.');
+  return presentDocumentRow(row);
+}
+
+export async function listMyDocuments(userId: string) {
+  const investor = await ownInvestor(userId);
+  const [{ data, error }, template] = await Promise.all([
+    supabaseAdmin
+      .from('vlb_documents')
+      .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
+      .eq('investor_id', investor.id)
+      .order('created_at', { ascending: false }),
+    loadAgreementTemplate(),
+  ]);
   if (error) {
     logDb('list documents', error);
     throw new VlbError(500, 'Could not load your documents.');
   }
   const rows = [];
   for (const row of data || []) {
-    let url: string | null = null;
-    try {
-      url = await getSignedViewUrl(row.r2_key, 600);
-    } catch (signError) {
-      logDb('sign document', signError);
-    }
-    rows.push({
-      id: row.id,
-      investment_id: row.investment_id,
-      kind: row.kind,
-      title: row.title,
-      mime: row.mime,
-      size_bytes: row.size_bytes,
-      created_at: row.created_at,
-      url,
-    });
+    rows.push(await presentDocumentRow(row));
+  }
+  if (template) {
+    rows.push(await presentDocumentRow(template));
   }
   return rows;
+}
+
+export async function signMyDocument(userId: string, documentId: string) {
+  const investor = await ownInvestor(userId);
+  const { data, error } = await supabaseAdmin
+    .from('vlb_documents')
+    .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key, investor_id')
+    .eq('id', documentId)
+    .maybeSingle();
+  if (error) {
+    logDb('sign my document', error);
+    throw new VlbError(500, 'Could not load this document.');
+  }
+  if (!data) throw new VlbError(404, 'Document not found.');
+  const own = data.investor_id === investor.id;
+  const template = data.kind === 'agreement_template' && data.investor_id == null;
+  if (!own && !template) throw new VlbError(404, 'Document not found.');
+  return presentDocumentRow(data);
 }
 
 export async function statementPayload(userId: string, investmentId: string) {
@@ -588,6 +663,147 @@ export async function statementPayload(userId: string, investmentId: string) {
       scholar_pesewas: paid.reduce((sum, row) => sum + Number(row.scholar_pesewas), 0),
       scheduled_net_pesewas: open.reduce((sum, row) => sum + Number(row.net_pesewas), 0),
     },
+    remaining_payouts: open.length,
+    principal_status: principalStatus(payouts, investment.status),
+  };
+}
+
+function principalStatus(payouts: PayoutRow[], investmentStatus: string): string {
+  const principal = payouts.find((row) => row.type === 'principal');
+  if (principal?.status === 'paid') return 'paid';
+  if (investmentStatus === 'settled') return 'settled';
+  if (principal) return principal.status;
+  return investmentStatus;
+}
+
+function mapPayoutPdfRows(payouts: PayoutRow[]) {
+  return payouts.map((row) => ({
+    type: row.type,
+    term_no: row.term_no,
+    period_no: row.period_no,
+    due_date: dateOnly(row.due_date),
+    gross_pesewas: Number(row.gross_pesewas),
+    scholar_pesewas: Number(row.scholar_pesewas),
+    net_pesewas: Number(row.net_pesewas),
+    status: row.status,
+    paid_at: row.paid_at,
+    reference: row.reference,
+  }));
+}
+
+export function investmentShortId(investmentId: string): string {
+  return investmentId.replace(/-/g, '').slice(0, 8).toUpperCase();
+}
+
+function confirmationFrom(investor: InvestorRow, investment: InvestmentRow, payouts: PayoutRow[], investorName: string) {
+  const principal = payouts.find((row) => row.type === 'principal');
+  return {
+    investor_name: investorName,
+    investor_no: investor.investor_no || investor.id,
+    plan_name: planNameOf(investment),
+    principal_pesewas: Number(investment.principal_pesewas),
+    start_date: dateOnly(investment.start_date),
+    maturity_date: dateOnly(investment.maturity_date),
+    payment_method: text(investment.payment_method) || null,
+    payment_reference: text(investment.payment_reference) || null,
+    agreement_signed_at: dateOnly(investment.agreement_signed_at) || null,
+    principal_settlement_month: principal ? dateOnly(principal.due_date) : dateOnly(investment.maturity_date),
+    total_net_pesewas: payouts.reduce((sum, row) => sum + Number(row.net_pesewas), 0),
+    payouts: mapPayoutPdfRows(payouts),
+  };
+}
+
+export async function confirmationPayload(userId: string, investmentId: string) {
+  const { investor, investment } = await ownInvestment(userId, investmentId);
+  const payouts = await loadPayouts([investment.id]);
+  const user = await loadUser(userId);
+  return confirmationFrom(investor, investment, payouts, displayName(user));
+}
+
+export async function confirmationPayloadAdmin(investmentId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('vlb_investments')
+    .select('*')
+    .eq('id', investmentId)
+    .maybeSingle();
+  if (error) {
+    logDb('confirmation admin', error);
+    throw new VlbError(500, 'Could not generate this confirmation.');
+  }
+  if (!data) throw new VlbError(404, 'Investment not found.');
+  const investment = data as InvestmentRow;
+  const investor = await loadInvestorById(investment.investor_id);
+  const payouts = await loadPayouts([investment.id]);
+  const user = await loadUser(investor.user_id);
+  return confirmationFrom(investor, investment, payouts, displayName(user));
+}
+
+export async function statementPayloadAdmin(investmentId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('vlb_investments')
+    .select('*')
+    .eq('id', investmentId)
+    .maybeSingle();
+  if (error) {
+    logDb('statement admin', error);
+    throw new VlbError(500, 'Could not generate this statement.');
+  }
+  if (!data) throw new VlbError(404, 'Investment not found.');
+  const investment = data as InvestmentRow;
+  const investor = await loadInvestorById(investment.investor_id);
+  return statementPayload(investor.user_id, investment.id);
+}
+
+function receiptNo(investmentId: string, periodNo: number): string {
+  return `VT-VLB-RCPT-${investmentShortId(investmentId)}-${periodNo}`;
+}
+
+export async function payoutReceiptPayload(payoutId: string, userId?: string) {
+  const { data: payout, error } = await supabaseAdmin
+    .from('vlb_payouts')
+    .select('*')
+    .eq('id', payoutId)
+    .maybeSingle();
+  if (error) {
+    logDb('payout receipt', error);
+    throw new VlbError(500, 'Could not generate this receipt.');
+  }
+  if (!payout) throw new VlbError(404, 'Payout not found.');
+  if (payout.status !== 'paid') throw new VlbError(404, 'Payout not found.');
+
+  const { data: investment, error: invError } = await supabaseAdmin
+    .from('vlb_investments')
+    .select('*')
+    .eq('id', payout.investment_id)
+    .maybeSingle();
+  if (invError) {
+    logDb('payout receipt investment', invError);
+    throw new VlbError(500, 'Could not generate this receipt.');
+  }
+  if (!investment) throw new VlbError(404, 'Payout not found.');
+
+  const investor = userId
+    ? await ownInvestor(userId)
+    : await loadInvestorById((investment as InvestmentRow).investor_id);
+  if (userId && (investment as InvestmentRow).investor_id !== investor.id) {
+    throw new VlbError(404, 'Payout not found.');
+  }
+
+  const user = await loadUser(investor.user_id);
+  const row = payout as PayoutRow;
+  return {
+    receipt_no: receiptNo(row.investment_id, row.period_no),
+    investor_name: displayName(user),
+    investor_no: investor.investor_no || investor.id,
+    plan_name: planNameOf(investment as InvestmentRow),
+    period_label: `${row.type} ${row.period_no}`,
+    due_date: dateOnly(row.due_date),
+    paid_at: row.paid_at,
+    gross_pesewas: Number(row.gross_pesewas),
+    scholar_pesewas: Number(row.scholar_pesewas),
+    net_pesewas: Number(row.net_pesewas),
+    method: row.method,
+    reference: row.reference,
   };
 }
 
@@ -607,10 +823,14 @@ function payoutFieldsChanged(row: InvestorRow, input: PayoutInput): boolean {
   );
 }
 
-export async function updateInvestorPayout(req: AuditReq, userId: string, input: PayoutInput) {
-  const row = await ownInvestor(userId);
+async function savePayoutDetails(
+  req: AuditReq,
+  row: InvestorRow,
+  input: PayoutInput,
+  options: { masked: boolean; staff: boolean }
+) {
   const changed = payoutFieldsChanged(row, input);
-  if (!changed) return presentPayoutDetails(row, true);
+  if (!changed) return presentPayoutDetails(row, options.masked);
 
   const now = new Date().toISOString();
   const patch = input.payout_method === 'momo'
@@ -637,7 +857,6 @@ export async function updateInvestorPayout(req: AuditReq, userId: string, input:
     .from('investors')
     .update(patch)
     .eq('id', row.id)
-    .eq('user_id', userId)
     .select('*')
     .single();
   if (error || !data) {
@@ -649,17 +868,26 @@ export async function updateInvestorPayout(req: AuditReq, userId: string, input:
     req,
     entity: 'investors',
     entityId: row.id,
-    action: 'vlb_payout_updated',
+    action: options.staff ? 'vlb_payout_updated_by_staff' : 'vlb_payout_updated',
     before: row,
     after: data,
   });
 
-  const user = await loadUser(userId);
+  const user = await loadUser(row.user_id);
   if (user?.email) {
     const sent = await emailService.sendEmail({
       to: user.email,
-      subject: 'Your payout details were changed',
-      html: `
+      subject: options.staff
+        ? 'Your payout details were updated by VENTECH'
+        : 'Your payout details were changed',
+      html: options.staff
+        ? `
+        <p>Hi ${escapeHtml(displayName(user))},</p>
+        <p>Your payout details were updated by VENTECH.</p>
+        <p>If you did not expect this change, contact VENTECH support.</p>
+        <p>VENTECH Gadgets</p>
+      `
+        : `
         <p>Hi ${escapeHtml(displayName(user))},</p>
         <p>Your Laptop Banking payout details were changed.</p>
         <p>If you did not make this change, contact support.</p>
@@ -669,5 +897,15 @@ export async function updateInvestorPayout(req: AuditReq, userId: string, input:
     if (!sent) console.error('vlb payout changed email failed');
   }
 
-  return presentPayoutDetails(data as InvestorRow, true);
+  return presentPayoutDetails(data as InvestorRow, options.masked);
+}
+
+export async function updateInvestorPayout(req: AuditReq, userId: string, input: PayoutInput) {
+  const row = await ownInvestor(userId);
+  return savePayoutDetails(req, row, input, { masked: true, staff: false });
+}
+
+export async function updateInvestorPayoutByStaff(req: AuditReq, investorId: string, input: PayoutInput) {
+  const row = await loadInvestorById(investorId);
+  return savePayoutDetails(req, row, input, { masked: false, staff: true });
 }

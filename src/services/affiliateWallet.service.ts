@@ -82,6 +82,7 @@ export function presentPayout(row: AffiliateRow, masked: boolean) {
     bank_name: row.bank_name || null,
     bank_account_name: row.bank_account_name || null,
     bank_account_number: masked ? maskTail(bank) : bank || null,
+    payout_details_changed_at: typeof row.payout_details_changed_at === 'string' ? row.payout_details_changed_at : null,
   };
 }
 

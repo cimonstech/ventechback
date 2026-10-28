@@ -1,13 +1,19 @@
 import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import {
+  FREE_DELIVERY_THRESHOLD,
+  PRE_ORDER_SHIPPING_PRICES,
+} from './pricing.money';
+
+export {
+  FREE_DELIVERY_THRESHOLD,
+  PRE_ORDER_SHIPPING_PRICES,
+  ghsToPesewas,
+  paymentCoversOrderTotals,
+} from './pricing.money';
 
 // Server-side copy of the storefront's price rules. Prices, delivery and
 // discounts sent by the browser are never trusted.
-const FREE_DELIVERY_THRESHOLD = 20000;
-const PRE_ORDER_SHIPPING_PRICES: Record<string, number> = {
-  air_cargo: 400,
-  ship_cargo: 200,
-};
 const DEFAULT_PRE_ORDER_SHIPPING = 'air_cargo';
 const MAX_QUANTITY_PER_ITEM = 100;
 const PAYMENT_REFERENCE_PATTERN = /^[A-Za-z0-9_.=-]{6,100}$/;
@@ -231,8 +237,8 @@ export async function priceOrder(input: {
   return { items: pricedItems, subtotal, deliveryFee, discount, couponId, tax, total };
 }
 
-// Confirms a payment with Paystack itself and returns the amount paid in GHS.
-export async function verifyPaystackPayment(reference: string): Promise<{ amountGhs: number; raw: any }> {
+// Confirms a payment with Paystack itself and returns the amount paid.
+export async function verifyPaystackPayment(reference: string): Promise<{ amountGhs: number; amountPesewas: number; raw: any }> {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) {
     throw new PricingError('Payment verification is not configured', 'PAYSTACK_NOT_CONFIGURED', 500);
@@ -254,5 +260,9 @@ export async function verifyPaystackPayment(reference: string): Promise<{ amount
     throw new PricingError('Payment was not successful', 'PAYMENT_NOT_SUCCESSFUL', 402);
   }
 
-  return { amountGhs: round2(Number(transaction.amount) / 100), raw: transaction };
+  const amountPesewas = Math.round(Number(transaction.amount));
+  if (!Number.isFinite(amountPesewas) || amountPesewas < 0) {
+    throw new PricingError('Payment was not successful', 'PAYMENT_NOT_SUCCESSFUL', 402);
+  }
+  return { amountGhs: round2(amountPesewas / 100), amountPesewas, raw: transaction };
 }

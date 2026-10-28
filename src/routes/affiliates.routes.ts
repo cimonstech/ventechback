@@ -12,15 +12,16 @@ import {
   postWithdrawal,
 } from '../controllers/affiliateMe.controller';
 import { authenticate, requireProgramRole } from '../middleware/auth.middleware';
+import { requireAffiliatesEnabled } from '../middleware/featureFlags.middleware';
 import { paymentRateLimiter } from '../middleware/rateLimit.middleware';
 
 const router = Router();
 const affiliate = requireProgramRole('affiliate');
 
 router.get('/public-info', getPublicInfo);
-router.post('/register', authenticate, postRegister);
-router.post('/fee/initialize', authenticate, paymentRateLimiter, postFeeInitialize);
-router.post('/fee/verify', authenticate, paymentRateLimiter, postFeeVerify);
+router.post('/register', authenticate, requireAffiliatesEnabled, postRegister);
+router.post('/fee/initialize', authenticate, paymentRateLimiter, requireAffiliatesEnabled, postFeeInitialize);
+router.post('/fee/verify', authenticate, paymentRateLimiter, requireAffiliatesEnabled, postFeeVerify);
 
 router.get('/me', authenticate, getAffiliateMe);
 router.get('/me/summary', affiliate, getAffiliateSummary);

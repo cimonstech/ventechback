@@ -45,9 +45,24 @@ export const getAllProducts = async (req: Request, res: Response) => {
       sortOrder = 'desc',
     } = req.query;
 
-    const pageNum = parseInt(page as string);
-    const limitNum = parseInt(limit as string);
-    const offset = (pageNum - 1) * limitNum;
+    const parsedPage = parseInt(String(page), 10);
+    const pageNum = Number.isFinite(parsedPage) ? Math.max(0, parsedPage) : 1;
+    const parsedLimit = parseInt(String(limit), 10);
+    const limitNum = Math.min(100, Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 12));
+    const parsedOffset =
+      req.query.offset == null ? NaN : parseInt(String(req.query.offset), 10);
+    const offset = Number.isFinite(parsedOffset)
+      ? Math.max(0, parsedOffset)
+      : Math.max(0, (Math.max(pageNum, 1) - 1) * limitNum);
+    const PRODUCT_SORT_COLUMNS = ['created_at', 'price', 'rating', 'name'] as const;
+    const sortColumn = PRODUCT_SORT_COLUMNS.includes(sortBy as (typeof PRODUCT_SORT_COLUMNS)[number])
+      ? (sortBy as (typeof PRODUCT_SORT_COLUMNS)[number])
+      : 'created_at';
+    const rawSearch = Array.isArray(search) ? search[0] : search;
+    const cleanedSearch =
+      typeof rawSearch === 'string'
+        ? rawSearch.trim().slice(0, 100).replace(/[,():*%\\]/g, '').trim()
+        : '';
 
     // Select products with category relationship
     // Note: count: 'exact' with relationships can cause corrupted errors, so we'll get count separately
@@ -115,19 +130,15 @@ export const getAllProducts = async (req: Request, res: Response) => {
       countQuery = countQuery.gte('rating', parseFloat(rating as string));
     }
 
-    if (search) {
-      // Search in name and description
-      // Note: Brand search requires brand column to exist (run migration if needed)
-      // For now, search only in name and description to avoid errors
-      const searchFilter = `name.ilike.%${search}%,description.ilike.%${search}%`;
+    if (cleanedSearch) {
+      const searchFilter = `name.ilike.%${cleanedSearch}%,description.ilike.%${cleanedSearch}%`;
       query = query.or(searchFilter);
       countQuery = countQuery.or(searchFilter);
-      // TODO: Add brand search after migration: `,brand.ilike.%${search}%`
     }
 
     // Apply sorting
-    const ascending = sortOrder === 'asc';
-    query = query.order(sortBy as string, { ascending });
+    const ascending = String(sortOrder) === 'asc';
+    query = query.order(sortColumn, { ascending });
 
     // Apply pagination (only to data query, not count query)
     query = query.range(offset, offset + limitNum - 1);

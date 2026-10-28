@@ -293,7 +293,7 @@ export async function emailCustomerMessage(input: {
 export async function signedMedia<T extends { r2_key: string }>(rows: T[]): Promise<Array<Omit<T, 'r2_key'> & { previewUrl: string }>> {
   const signed = [];
   for (const row of rows) {
-    const previewUrl = await getSignedViewUrl(row.r2_key, 600);
+    const previewUrl = await getSignedViewUrl(row.r2_key);
     const { r2_key: _key, ...rest } = row;
     signed.push({ ...rest, previewUrl });
   }

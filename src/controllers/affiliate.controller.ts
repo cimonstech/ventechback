@@ -69,10 +69,9 @@ class AffiliateController {
 
     } catch (error) {
       console.error('Error processing affiliate application:', error);
-      return res.status(200).json({
+      return res.status(500).json({
         success: false,
-        message: 'Your application was received. Email notification will be retried by the server.',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        message: 'Could not submit this application.',
       });
     }
   }
