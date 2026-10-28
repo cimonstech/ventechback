@@ -1,7 +1,7 @@
 import express from 'express';
 import { OrderController } from '../controllers/order.controller';
 import { orderRateLimiter } from '../middleware/rateLimit.middleware';
-import { optionalAuth, requirePermission } from '../middleware/auth.middleware';
+import { optionalAuth, requireAnyPermission, requirePermission } from '../middleware/auth.middleware';
 
 const router = express.Router();
 const orderController = new OrderController();
@@ -9,8 +9,14 @@ const orderController = new OrderController();
 // Track order by number/ID and email (public endpoint)
 router.post('/track', orderRateLimiter, orderController.trackOrder.bind(orderController));
 
-// Get all orders (orders view)
-router.get('/', requirePermission('orders', 'view'), orderController.getAllOrders.bind(orderController));
+// Get all orders (orders pages and finance revenue/sales)
+router.get('/', requireAnyPermission(['orders', 'finance'], 'view'), orderController.getAllOrders.bind(orderController));
+
+router.post(
+  '/notifications/read',
+  requireAnyPermission(['orders', 'finance'], 'view'),
+  orderController.markOrderNotificationsRead.bind(orderController)
+);
 
 // Get order by ID (owner, admin, or guest order by its unguessable ID)
 router.get('/:id', optionalAuth, orderController.getOrderById.bind(orderController));
@@ -33,8 +39,8 @@ router.post('/wishlist-reminder/:user_id', requirePermission('orders', 'edit'), 
 // Send cart abandonment reminder
 router.post('/cart-abandonment-reminder', requirePermission('orders', 'edit'), orderController.sendCartAbandonmentReminder.bind(orderController));
 
-// Get order items (admin)
-router.get('/:id/items', requirePermission('orders', 'view'), orderController.getOrderItems.bind(orderController));
+// Get order items (orders pages and finance analytics)
+router.get('/:id/items', requireAnyPermission(['orders', 'finance'], 'view'), orderController.getOrderItems.bind(orderController));
 
 // Download order PDF
 router.get('/:id/pdf', requirePermission('orders', 'view'), orderController.downloadOrderPDF.bind(orderController));

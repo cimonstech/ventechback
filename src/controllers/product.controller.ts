@@ -1,7 +1,33 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/responseHandlers';
-import { AuthRequest } from '../middleware/auth.middleware';
+import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
+
+export const PRE_ORDER_PRODUCT_FIELDS = [
+  'is_pre_order',
+  'pre_order_available',
+  'estimated_arrival_date',
+] as const;
+
+export function isPreOrderOnlyProductPatch(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return false;
+  }
+
+  const record = body as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, 'variants')) {
+    return false;
+  }
+
+  const keys = Object.keys(record);
+  if (keys.length === 0) {
+    return false;
+  }
+
+  return keys.every((key) =>
+    (PRE_ORDER_PRODUCT_FIELDS as readonly string[]).includes(key)
+  );
+}
 
 export const getAllProducts = async (req: Request, res: Response) => {
   try {
@@ -450,6 +476,13 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { variants, ...updates } = req.body;
+
+    if (req.user?.role === 'staff' && !(await staffHasModuleAccess(req, 'products', 'edit'))) {
+      if (Array.isArray(variants) || !isPreOrderOnlyProductPatch({ ...updates })) {
+        return errorResponse(res, 'Forbidden - Permission required', 403);
+      }
+    }
+
     if (!applyWarrantyMonths(updates, res)) return;
 
     // ✅ Auto-sync in_stock flag with stock_quantity

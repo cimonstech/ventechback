@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
+import { errorResponse, successResponse } from '../utils/responseHandlers';
 import {
   PricingError,
   isValidPaymentReference,
@@ -183,7 +184,10 @@ export class OrderController {
   private async canAccessOrder(req: AuthRequest, order: any, email?: string): Promise<boolean> {
     const role = req.user?.role;
     if (role === 'admin' || role === 'superadmin') return true;
-    if (role === 'staff' && await staffHasModuleAccess(req, 'orders', 'view')) return true;
+    if (role === 'staff') {
+      if (await staffHasModuleAccess(req, 'orders', 'view')) return true;
+      if (await staffHasModuleAccess(req, 'finance', 'view')) return true;
+    }
     if (order.user_id) return req.user?.id === order.user_id;
     const expected = this.orderEmail(order);
     const given = email?.trim().toLowerCase();
@@ -1700,6 +1704,26 @@ export class OrderController {
         message: 'Failed to generate order PDF',
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  }
+
+  async markOrderNotificationsRead(_req: Request, res: Response) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('type', 'order')
+        .eq('is_read', false);
+
+      if (error) {
+        console.error('Mark order notifications read error:', error);
+        return errorResponse(res, 'Could not update notifications.', 500);
+      }
+
+      return successResponse(res, { updated: true }, 'Notifications marked as read');
+    } catch (error) {
+      console.error('Mark order notifications read error:', error);
+      return errorResponse(res, 'Could not update notifications.', 500);
     }
   }
 }

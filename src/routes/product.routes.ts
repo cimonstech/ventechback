@@ -7,8 +7,15 @@ import {
   updateProduct,
   deleteProduct,
   getAllCategories,
+  isPreOrderOnlyProductPatch,
 } from '../controllers/product.controller';
-import { requirePermission } from '../middleware/auth.middleware';
+import {
+  authenticate,
+  AuthRequest,
+  requirePermission,
+  staffHasModuleAccess,
+} from '../middleware/auth.middleware';
+import { errorResponse } from '../utils/responseHandlers';
 import { 
   publicRateLimiter, 
   productDetailsRateLimiter,
@@ -32,9 +39,38 @@ router.get('/featured', publicRateLimiter, getFeaturedProducts);
 router.get('/categories', publicRateLimiter, getAllCategories);
 router.get('/:slug', productDetailsRateLimiter, getProductBySlug);
 
+const requireProductUpdateAccess = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return errorResponse(res, 'Unauthorized', 401);
+  }
+
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') {
+    return next();
+  }
+
+  if (req.user.role !== 'staff') {
+    return errorResponse(res, 'Forbidden - Permission required', 403);
+  }
+
+  try {
+    if (await staffHasModuleAccess(req, 'products', 'edit')) {
+      return next();
+    }
+
+    if (await staffHasModuleAccess(req, 'orders', 'edit') && isPreOrderOnlyProductPatch(req.body)) {
+      return next();
+    }
+
+    return errorResponse(res, 'Forbidden - Permission required', 403);
+  } catch (error) {
+    console.error('Permission check error:', error);
+    return errorResponse(res, 'Failed to check permissions', 500);
+  }
+};
+
 // Admin routes
 router.post('/', requirePermission('products', 'edit'), createProduct);
-router.put('/:id', requirePermission('products', 'edit'), updateProduct);
+router.put('/:id', authenticate, requireProductUpdateAccess, updateProduct);
 router.delete('/:id', requirePermission('products', 'edit'), deleteProduct);
 
 export default router;

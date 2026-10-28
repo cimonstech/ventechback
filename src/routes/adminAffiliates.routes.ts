@@ -20,6 +20,7 @@ import {
 import {
   authenticate,
   AuthRequest,
+  requireAnyPermission,
   requirePermission,
   staffHasModuleAccess,
 } from '../middleware/auth.middleware';
@@ -28,7 +29,6 @@ import { errorResponse } from '../utils/responseHandlers';
 const router = Router();
 const view = requirePermission('affiliates', 'view');
 const edit = requirePermission('affiliates', 'edit');
-const finance = requirePermission('finance', 'edit');
 
 const money = [
   authenticate,
@@ -64,8 +64,8 @@ const withdrawalStatusPerms = [
   },
 ];
 
-router.get('/settings', finance, adminGetSettings);
-router.put('/settings', finance, adminPutSettings);
+router.get('/settings', requireAnyPermission(['affiliates', 'finance'], 'view'), adminGetSettings);
+router.put('/settings', requirePermission('finance', 'edit'), adminPutSettings);
 router.get('/metrics', view, adminMetrics);
 router.get('/export/:kind', view, adminExport);
 router.get('/commissions', view, adminListCommissions);
