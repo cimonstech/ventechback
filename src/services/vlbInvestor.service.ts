@@ -570,18 +570,29 @@ async function presentDocumentRow(row: {
   };
 }
 
-export async function loadAgreementTemplate() {
+export const PUBLIC_DOC_KINDS = ['guide', 'agreement_template'] as const;
+export type PublicDocKind = (typeof PUBLIC_DOC_KINDS)[number];
+
+export function isPublicDocKind(value: string): value is PublicDocKind {
+  return (PUBLIC_DOC_KINDS as readonly string[]).includes(value);
+}
+
+export async function loadPublicDocument(kind: PublicDocKind) {
   const { data, error } = await supabaseAdmin
     .from('vlb_documents')
     .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
-    .eq('kind', 'agreement_template')
+    .eq('kind', kind)
     .is('investor_id', null)
     .maybeSingle();
   if (error) {
-    logDb('load agreement template', error);
-    throw new VlbError(500, 'Could not load the agreement template.');
+    logDb(`load public document ${kind}`, error);
+    throw new VlbError(500, 'Could not load this document.');
   }
   return data;
+}
+
+export async function loadAgreementTemplate() {
+  return loadPublicDocument('agreement_template');
 }
 
 export async function publicAgreementTemplateLink() {
@@ -590,15 +601,36 @@ export async function publicAgreementTemplateLink() {
   return presentDocumentRow(row);
 }
 
+export async function publicDocsLinks() {
+  const [guide, agreement] = await Promise.all([
+    loadPublicDocument('guide'),
+    loadPublicDocument('agreement_template'),
+  ]);
+  const result: {
+    guide?: { title: string; url: string };
+    agreement_template?: { title: string; url: string };
+  } = {};
+  if (guide) {
+    const presented = await presentDocumentRow(guide);
+    if (presented.url) result.guide = { title: presented.title, url: presented.url };
+  }
+  if (agreement) {
+    const presented = await presentDocumentRow(agreement);
+    if (presented.url) result.agreement_template = { title: presented.title, url: presented.url };
+  }
+  return result;
+}
+
 export async function listMyDocuments(userId: string) {
   const investor = await ownInvestor(userId);
-  const [{ data, error }, template] = await Promise.all([
+  const [{ data, error }, template, guide] = await Promise.all([
     supabaseAdmin
       .from('vlb_documents')
       .select('id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
       .eq('investor_id', investor.id)
       .order('created_at', { ascending: false }),
-    loadAgreementTemplate(),
+    loadPublicDocument('agreement_template'),
+    loadPublicDocument('guide'),
   ]);
   if (error) {
     logDb('list documents', error);
@@ -610,6 +642,9 @@ export async function listMyDocuments(userId: string) {
   }
   if (template) {
     rows.push(await presentDocumentRow(template));
+  }
+  if (guide) {
+    rows.push(await presentDocumentRow(guide));
   }
   return rows;
 }
@@ -627,8 +662,8 @@ export async function signMyDocument(userId: string, documentId: string) {
   }
   if (!data) throw new VlbError(404, 'Document not found.');
   const own = data.investor_id === investor.id;
-  const template = data.kind === 'agreement_template' && data.investor_id == null;
-  if (!own && !template) throw new VlbError(404, 'Document not found.');
+  const sharedPublic = isPublicDocKind(data.kind) && data.investor_id == null;
+  if (!own && !sharedPublic) throw new VlbError(404, 'Document not found.');
   return presentDocumentRow(data);
 }
 

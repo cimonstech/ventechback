@@ -5,6 +5,7 @@ import pdfService from '../services/pdf.service';
 import {
   applyReferralBonus,
   deleteInvestorDocument,
+  deletePublicDocument,
   getAgreementTemplateAdmin,
   getApplication,
   getInvestmentAdmin,
@@ -27,11 +28,14 @@ import {
   settleInvestment,
   signAdminDocument,
   updateInvestorPayoutByStaff,
+  listPublicDocumentsAdmin,
   uploadAgreementTemplate,
   uploadInvestorDocument,
+  uploadPublicDocument,
 } from '../services/vlbAdmin.service';
 import {
   confirmationPayloadAdmin,
+  isPublicDocKind,
   payoutReceiptPayload,
   statementPayloadAdmin,
 } from '../services/vlbInvestor.service';
@@ -475,10 +479,51 @@ export async function adminUploadAgreementTemplate(req: AuthRequest, res: Respon
     const file = req.file;
     if (!file?.buffer?.length) return errorResponse(res, 'Choose a file.', 400);
     const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
-    const data = await uploadAgreementTemplate(req, { file, title: title || undefined });
+    const data = await uploadAgreementTemplate(req, {
+      file,
+      title: title || file.originalname || undefined,
+    });
     return successResponse(res, data, 'Agreement template saved.', 201);
   } catch (error) {
     return fail(res, error, 'Could not store this file.');
+  }
+}
+
+export async function adminListPublicDocs(_req: AuthRequest, res: Response) {
+  try {
+    const data = await listPublicDocumentsAdmin();
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load public documents.');
+  }
+}
+
+export async function adminUploadPublicDoc(req: AuthRequest, res: Response) {
+  try {
+    const kind = routeId(req.params.kind);
+    if (!isPublicDocKind(kind)) return errorResponse(res, 'That document slot is not available.', 400);
+    const file = req.file;
+    if (!file?.buffer?.length) return errorResponse(res, 'Choose a file.', 400);
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const data = await uploadPublicDocument(req, {
+      kind,
+      file,
+      title: title || file.originalname || undefined,
+    });
+    return successResponse(res, data, kind === 'guide' ? 'Guide saved.' : 'Agreement template saved.', 201);
+  } catch (error) {
+    return fail(res, error, 'Could not store this file.');
+  }
+}
+
+export async function adminDeletePublicDoc(req: AuthRequest, res: Response) {
+  try {
+    const kind = routeId(req.params.kind);
+    if (!isPublicDocKind(kind)) return errorResponse(res, 'That document slot is not available.', 400);
+    const data = await deletePublicDocument(req, kind);
+    return successResponse(res, data, 'Document removed.');
+  } catch (error) {
+    return fail(res, error, 'Could not remove this file.');
   }
 }
 

@@ -76,7 +76,7 @@ export async function updateFeatureFlags(
         description:
           key === FEATURE_AFFILIATES_KEY
             ? 'When true, the paid affiliate programme is live'
-            : 'When true, Laptop Banking V3.0 is live',
+            : 'When true, staff can activate investments and investors get their dashboard',
         updated_at: new Date().toISOString(),
         updated_by: userId,
       },

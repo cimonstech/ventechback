@@ -24,6 +24,7 @@ import {
   tryCreatePendingDevicesForOrder,
   tryHandleOrderCancelledOrRefunded,
 } from '../services/deviceRegistration.service';
+import { loadOrderTimeline } from '../services/superadmin.service';
 
 export class OrderController {
   // Get all orders (admin)
@@ -236,7 +237,7 @@ export class OrderController {
   // Get order by ID
   async getOrderById(req: AuthRequest, res: Response) {
     try {
-      const { id } = req.params;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
       const { data, error } = await supabaseAdmin
         .from('orders')
@@ -281,12 +282,17 @@ export class OrderController {
       const estimatedArrivalDate = data.estimated_arrival_date || data.shipping_address?.estimated_arrival_date || null;
 
       // Add pre-order fields to the response
-      const orderData = {
+      const role = req.user?.role;
+      const privileged = role === 'staff' || role === 'admin' || role === 'superadmin';
+      const orderData: Record<string, unknown> = {
         ...data,
         is_pre_order: isPreOrder,
         pre_order_shipping_option: preOrderShippingOption,
         estimated_arrival_date: estimatedArrivalDate,
       };
+      if (privileged) {
+        orderData.timeline = await loadOrderTimeline(id, req.user);
+      }
 
       res.json({
         success: true,
@@ -947,7 +953,7 @@ export class OrderController {
         paymentStatus = 'paid';
       }
 
-      let attribution: { affiliateId: string; clickId: string } | null = null;
+      let attribution: { affiliateId: string; clickId: string; skipReason?: 'self_referral' | null } | null = null;
       let affiliatesOn = false;
       try {
         affiliatesOn = await isAffiliatesEnabled();
@@ -1011,7 +1017,11 @@ export class OrderController {
         // 'paid' only after Paystack has confirmed the payment above
         payment_status: paymentStatus,
         ...(attribution
-          ? { affiliate_id: attribution.affiliateId, referral_click_id: attribution.clickId }
+          ? {
+              affiliate_id: attribution.affiliateId,
+              referral_click_id: attribution.clickId,
+              ...(attribution.skipReason ? { affiliate_skip_reason: attribution.skipReason } : {}),
+            }
           : {}),
       };
 

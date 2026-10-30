@@ -225,14 +225,12 @@ export async function getSales(userId: string, page: number, limit: number) {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
   const { data, error, count } = await supabaseAdmin
-    .from('affiliate_commissions')
+    .from('orders')
     .select(
       `
-      id, status, amount_pesewas, created_at,
-      order:orders!affiliate_commissions_order_id_fkey(
-        order_number, created_at,
-        order_items:order_items(product_name)
-      )
+      order_number, created_at, affiliate_skip_reason,
+      order_items:order_items(product_name),
+      commissions:affiliate_commissions!affiliate_commissions_order_id_fkey(status, amount_pesewas)
     `,
       { count: 'exact' }
     )
@@ -244,17 +242,18 @@ export async function getSales(userId: string, page: number, limit: number) {
     throw new AffiliateError(500, 'Could not load your sales.');
   }
   const rows = (data || []).map((item: any) => {
-    const order = Array.isArray(item.order) ? item.order[0] : item.order;
-    const items = order?.order_items || [];
+    const commission = Array.isArray(item.commissions) ? item.commissions[0] : item.commissions;
+    const items = item.order_items || [];
     const names = items
       .map((line: { product_name?: string }) => line.product_name)
       .filter((name: unknown): name is string => typeof name === 'string' && !!name);
     return {
-      order_number: order?.order_number || null,
+      order_number: item.order_number || null,
       product_names: names,
-      date: order?.created_at || item.created_at,
-      commission_status: item.status,
-      amount_pesewas: item.amount_pesewas,
+      date: item.created_at,
+      commission_status: commission?.status || 'none',
+      amount_pesewas: commission?.amount_pesewas || 0,
+      skip_reason: item.affiliate_skip_reason || null,
     };
   });
   return { rows, total: count || 0 };

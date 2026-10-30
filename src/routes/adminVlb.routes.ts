@@ -4,6 +4,7 @@ import {
   adminActivateApplication,
   adminCreatePlan,
   adminDeleteDocument,
+  adminDeletePublicDoc,
   adminGetAgreementTemplate,
   adminGetApplication,
   adminGetDocument,
@@ -16,6 +17,7 @@ import {
   adminListInvestors,
   adminListPayouts,
   adminListPlans,
+  adminListPublicDocs,
   adminListUpgrades,
   adminMarkPayoutPaid,
   adminPatchApplication,
@@ -33,6 +35,7 @@ import {
   adminUpdatePlan,
   adminUploadAgreementTemplate,
   adminUploadDocument,
+  adminUploadPublicDoc,
 } from '../controllers/adminVlb.controller';
 import {
   authenticate,
@@ -102,14 +105,14 @@ router.get('/investments/:id/confirmation.pdf', view, adminInvestmentConfirmatio
 router.get('/investments/:id/statement.pdf', view, adminInvestmentStatementPdf);
 router.get('/investments/:id', view, adminGetInvestment);
 router.post('/investments/:id/settle', money, adminSettleInvestment);
-router.post('/investments/:id/renew', money, adminRenewInvestment);
+router.post('/investments/:id/renew', money, requireVlbV3Enabled, adminRenewInvestment);
 router.post('/investments/:id/stars', edit, adminRecordStars);
 router.post('/investments/:id/referral-bonus', money, adminReferralBonus);
 
 router.get('/preview-schedule', view, adminPreviewSchedule);
 router.get('/payouts', view, adminListPayouts);
 router.get('/payouts/:id/receipt.pdf', view, adminPayoutReceiptPdf);
-router.post('/payouts/:id/mark-paid', money, adminMarkPayoutPaid);
+router.post('/payouts/:id/mark-paid', money, requireVlbV3Enabled, adminMarkPayoutPaid);
 
 router.get('/settlement', view, adminSettlementQueue);
 
@@ -118,6 +121,9 @@ router.patch('/upgrade-requests/:id', edit, adminPatchUpgrade);
 
 router.get('/agreement-template', view, adminGetAgreementTemplate);
 router.post('/agreement-template', edit, uploadRateLimiter, acceptDocument, adminUploadAgreementTemplate);
+router.get('/public-docs', view, adminListPublicDocs);
+router.post('/public-docs/:kind', edit, uploadRateLimiter, acceptDocument, adminUploadPublicDoc);
+router.delete('/public-docs/:kind', edit, adminDeletePublicDoc);
 router.get('/documents/:id', view, adminGetDocument);
 router.delete('/documents/:id', requireSuperadmin, adminDeleteDocument);
 

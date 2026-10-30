@@ -11,6 +11,7 @@ import {
   orderDeviceStatus,
 } from '../services/deviceRegistration.service';
 import { portalEventStats } from '../services/portalEvents.service';
+import { isSuperadmin, maskStaffUserId } from '../services/superadmin.service';
 
 const DEVICE_STATUSES = ['pending', 'active', 'transferred', 'retired'] as const;
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -155,7 +156,7 @@ function auditDevice(row: Record<string, any> | null) {
   };
 }
 
-async function presentDevice(row: Record<string, any>) {
+async function presentDevice(row: Record<string, any>, viewer?: { role?: string | null } | null) {
   const product = one(row.product);
   const order = one(row.order);
   const owner = one(row.owner);
@@ -163,6 +164,8 @@ async function presentDevice(row: Record<string, any>) {
     product: _product,
     order: _order,
     owner: _owner,
+    created_by: createdBy,
+    updated_by: updatedBy,
     ...device
   } = row;
 
@@ -172,6 +175,8 @@ async function presentDevice(row: Record<string, any>) {
 
   return {
     ...device,
+    created_by: await maskStaffUserId(viewer, createdBy),
+    updated_by: await maskStaffUserId(viewer, updatedBy),
     warranty: warrantyStatus(device),
     order_number: order?.order_number ?? null,
     product: product
@@ -287,7 +292,7 @@ export async function listDevices(req: AuthRequest, res: Response) {
         logDb('list devices', error);
         return errorResponse(res, 'Failed to load devices', 500);
       }
-      const filtered = (await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row))))
+      const filtered = (await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row, req.user))))
         .filter((row) => row.warranty.status === warranty);
       const start = (page - 1) * limit;
       const pendingCount = await countPendingDevices();
@@ -314,7 +319,7 @@ export async function listDevices(req: AuthRequest, res: Response) {
 
     const total = countResult.count || 0;
     const pendingCount = await countPendingDevices();
-    return paginatedResponse(res, await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row))), {
+    return paginatedResponse(res, await Promise.all(((data || []) as Record<string, any>[]).map((row) => presentDevice(row, req.user))), {
       page,
       limit,
       total,
@@ -657,7 +662,7 @@ export async function createDevices(req: AuthRequest, res: Response) {
       devices: savedRows.map((row) => ({ model_name: row.model_name, qr_token: row.qr_token })),
     });
 
-    return successResponse(res, await Promise.all(savedRows.map((row) => presentDevice(row))), 'Devices registered.', savedRows.some((row) => row.status === 'active') && createItems.length ? 201 : 200);
+    return successResponse(res, await Promise.all(savedRows.map((row) => presentDevice(row, req.user))), 'Devices registered.', savedRows.some((row) => row.status === 'active') && createItems.length ? 201 : 200);
   } catch (error) {
     const unique = dbCode(error);
     if (unique.code === '23505') {
@@ -684,7 +689,7 @@ export async function getDevice(req: AuthRequest, res: Response) {
     }
     if (!data) return errorResponse(res, 'Device not found.', 404);
 
-    return successResponse(res, await presentDevice(data));
+    return successResponse(res, await presentDevice(data, req.user));
   } catch (error) {
     logDb('get device', error);
     return errorResponse(res, 'Failed to load device', 500);
@@ -716,8 +721,8 @@ export async function updateDevice(req: AuthRequest, res: Response) {
     if (!before) return errorResponse(res, 'Device not found.', 404);
 
     if (body.warranty_start) {
-      if (req.user?.role !== 'superadmin') {
-        return errorResponse(res, 'Only a superadmin can change the warranty start date.', 403);
+      if (!isSuperadmin(req.user)) {
+        return errorResponse(res, 'This field cannot be changed.', 400);
       }
       if (!body.warranty_start_reason) {
         return errorResponse(res, 'Give a reason for changing the warranty start date.', 400);
@@ -781,7 +786,7 @@ export async function updateDevice(req: AuthRequest, res: Response) {
       });
     }
 
-    return successResponse(res, await presentDevice(data), activating ? 'Laptop registered.' : 'Device updated.');
+    return successResponse(res, await presentDevice(data, req.user), activating ? 'Laptop registered.' : 'Device updated.');
   } catch (error) {
     logDb('update device', error);
     return errorResponse(res, 'Failed to update device', 500);
@@ -826,7 +831,7 @@ export async function regenerateToken(req: AuthRequest, res: Response) {
       after: { serial_number: data.serial_number, status: data.status },
     });
 
-    return successResponse(res, await presentDevice(data), 'QR code regenerated.');
+    return successResponse(res, await presentDevice(data, req.user), 'QR code regenerated.');
   } catch (error) {
     logDb('regenerate device token', error);
     return errorResponse(res, 'Failed to regenerate the QR code', 500);
@@ -863,7 +868,7 @@ export async function linkOwner(req: AuthRequest, res: Response) {
     if (!account) return errorResponse(res, 'No account found for that email.', 404);
 
     if (before.user_id === account.id) {
-      return successResponse(res, await presentDevice(before), 'Owner linked.');
+      return successResponse(res, await presentDevice(before, req.user), 'Owner linked.');
     }
 
     const nextStatus = before.user_id && before.user_id !== account.id ? 'transferred' : before.status;
@@ -899,7 +904,7 @@ export async function linkOwner(req: AuthRequest, res: Response) {
       qrToken: data.qr_token,
     });
 
-    return successResponse(res, await presentDevice(data), 'Owner linked.');
+    return successResponse(res, await presentDevice(data, req.user), 'Owner linked.');
   } catch (error) {
     logDb('link device owner', error);
     return errorResponse(res, 'Failed to link the owner', 500);
@@ -923,7 +928,7 @@ export async function unlinkOwner(req: AuthRequest, res: Response) {
     if (!before) return errorResponse(res, 'Device not found.', 404);
 
     if (!before.user_id) {
-      return successResponse(res, await presentDevice(before), 'Owner removed.');
+      return successResponse(res, await presentDevice(before, req.user), 'Owner removed.');
     }
 
     const { data, error } = await supabaseAdmin
@@ -947,7 +952,7 @@ export async function unlinkOwner(req: AuthRequest, res: Response) {
       after: auditDevice(data),
     });
 
-    return successResponse(res, await presentDevice(data), 'Owner removed.');
+    return successResponse(res, await presentDevice(data, req.user), 'Owner removed.');
   } catch (error) {
     logDb('unlink device owner', error);
     return errorResponse(res, 'Failed to unlink the owner', 500);

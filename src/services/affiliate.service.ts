@@ -52,6 +52,7 @@ export interface RegisterInput {
 export interface Attribution {
   affiliateId: string;
   clickId: string;
+  skipReason?: 'self_referral' | null;
 }
 
 type AuditReq = Request & { user?: { id?: string; role?: string } };
@@ -709,17 +710,21 @@ export async function resolveReferralAttribution(input: {
     const buyerUser = input.buyerUserId ? await loadUserContact(input.buyerUserId) : null;
 
     const buyerIds = [input.buyerUserId, buyerUser?.id].filter(Boolean).map(String);
-    if (buyerIds.includes(String(affiliate.user_id))) return null;
+    const selfById = buyerIds.includes(String(affiliate.user_id));
 
     const buyerEmails = [input.buyerEmail, buyerUser?.email].map(lower).filter(Boolean);
     const affiliateEmail = lower(affiliateUser?.email);
-    if (affiliateEmail && buyerEmails.includes(affiliateEmail)) return null;
+    const selfByEmail = !!(affiliateEmail && buyerEmails.includes(affiliateEmail));
 
     const buyerPhones = [input.buyerPhone, buyerUser?.phone].map(digits).filter((value) => value.length >= 7);
     const affiliatePhone = digits(affiliateUser?.phone);
-    if (affiliatePhone.length >= 7 && buyerPhones.includes(affiliatePhone)) return null;
+    const selfByPhone = affiliatePhone.length >= 7 && buyerPhones.includes(affiliatePhone);
 
-    return { affiliateId: affiliate.id, clickId: click.id };
+    return {
+      affiliateId: affiliate.id,
+      clickId: click.id,
+      skipReason: selfById || selfByEmail || selfByPhone ? 'self_referral' : null,
+    };
   } catch (error) {
     logDb('resolve referral', error);
     return null;

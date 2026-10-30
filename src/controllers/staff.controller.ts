@@ -4,6 +4,12 @@ import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
 import { logAudit } from '../services/audit.service';
+import {
+  invalidateSuperadminIdCache,
+  isSuperadmin,
+  staffRolesForViewer,
+  userLookupStatus,
+} from '../services/superadmin.service';
 
 const MODULES = ['orders', 'products', 'content', 'devices', 'tickets', 'affiliates', 'vlb', 'finance'] as const;
 const ROLES = ['staff', 'admin', 'superadmin'] as const;
@@ -176,7 +182,7 @@ export const listStaff = async (req: AuthRequest, res: Response) => {
     const { data, error } = await supabaseAdmin
       .from('users')
       .select('id, email, first_name, last_name, full_name, role, created_at')
-      .in('role', ['staff', 'admin', 'superadmin'])
+      .in('role', staffRolesForViewer(req.user))
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -201,16 +207,34 @@ export const listStaff = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const getStaff = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = routeId(req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('id, email, first_name, last_name, full_name, role, created_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (userLookupStatus(data, req.user) === 'not_found') {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
+    if (!data || !['staff', 'admin', 'superadmin'].includes(data.role)) {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
+    const permissions = await loadPermissions(id);
+    return successResponse(res, { ...data, staff_permissions: permissions }, 'Staff loaded');
+  } catch (error) {
+    console.error('Error loading staff member:', error instanceof Error ? error.message : error);
+    return errorResponse(res, 'Failed to load staff member', 500);
+  }
+};
+
 export const createStaff = async (req: AuthRequest, res: Response) => {
   try {
     const parsed = createStaffSchema.safeParse(req.body);
     if (!parsed.success) {
       return errorResponse(res, 'Invalid staff details', 400, parsed.error.flatten());
-    }
-
-    const actorRole = req.user?.role || '';
-    if (!allowedRoles(actorRole).includes(parsed.data.role)) {
-      return errorResponse(res, 'You cannot assign that role', 403);
     }
 
     const email = parsed.data.email.toLowerCase();
@@ -220,6 +244,15 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       .eq('email', email)
       .maybeSingle();
     if (profileError) throw profileError;
+
+    if (!isSuperadmin(req.user) && existingProfile?.role === 'superadmin') {
+      return successResponse(res, { email }, 'Staff member saved', 201);
+    }
+
+    const actorRole = req.user?.role || '';
+    if (!allowedRoles(actorRole).includes(parsed.data.role)) {
+      return errorResponse(res, 'Invalid staff details', 400);
+    }
 
     let authUserId = existingProfile?.id as string | undefined;
     if (!authUserId) {
@@ -269,6 +302,10 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       after: { ...after, permissions: parsed.data.permissions },
     });
 
+    if (parsed.data.role === 'superadmin' || before?.role === 'superadmin') {
+      invalidateSuperadminIdCache();
+    }
+
     return successResponse(res, { ...after, permissions: parsed.data.permissions }, 'Staff member saved', 201);
   } catch (error) {
     console.error('Error creating staff:', error instanceof Error ? error.message : error);
@@ -286,7 +323,7 @@ export const updateStaff = async (req: AuthRequest, res: Response) => {
 
     const actorRole = req.user?.role || '';
     if (!allowedRoles(actorRole).includes(parsed.data.role)) {
-      return errorResponse(res, 'You cannot assign that role', 403);
+      return errorResponse(res, 'Invalid staff details', 400);
     }
 
     const { data: existing, error: fetchError } = await supabaseAdmin
@@ -295,7 +332,12 @@ export const updateStaff = async (req: AuthRequest, res: Response) => {
       .eq('id', id)
       .maybeSingle();
     if (fetchError) throw fetchError;
-    if (!existing) return errorResponse(res, 'Staff member not found', 404);
+    if (userLookupStatus(existing, req.user) === 'not_found') {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
+    if (!existing || !['staff', 'admin', 'superadmin'].includes(existing.role)) {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
 
     if (existing.role === 'superadmin' && parsed.data.role !== 'superadmin') {
       const count = await superadminCount();
@@ -340,6 +382,10 @@ export const updateStaff = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    if (existing.role === 'superadmin' || parsed.data.role === 'superadmin') {
+      invalidateSuperadminIdCache();
+    }
+
     return successResponse(res, { ...updated, permissions: parsed.data.permissions }, 'Staff member updated');
   } catch (error) {
     console.error('Error updating staff:', error instanceof Error ? error.message : error);
@@ -360,7 +406,12 @@ export const demoteStaff = async (req: AuthRequest, res: Response) => {
       .eq('id', id)
       .maybeSingle();
     if (fetchError) throw fetchError;
-    if (!existing) return errorResponse(res, 'Staff member not found', 404);
+    if (userLookupStatus(existing, req.user) === 'not_found') {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
+    if (!existing || !['staff', 'admin', 'superadmin'].includes(existing.role)) {
+      return errorResponse(res, 'Staff member not found', 404);
+    }
 
     if (existing.role === 'superadmin') {
       const count = await superadminCount();
@@ -395,6 +446,8 @@ export const demoteStaff = async (req: AuthRequest, res: Response) => {
       before: { ...existing, permissions: permissionsBefore },
       after: { ...updated, permissions: [] },
     });
+
+    if (existing.role === 'superadmin') invalidateSuperadminIdCache();
 
     return successResponse(res, updated, 'Staff member demoted');
   } catch (error) {

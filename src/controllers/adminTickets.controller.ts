@@ -25,6 +25,16 @@ import {
 import pdfService from '../services/pdf.service';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { errorResponse, paginatedResponse, successResponse } from '../utils/responseHandlers';
+import {
+  TEAM_ACTOR_NAME,
+  getSuperadminIdSet,
+  isHiddenSuperadmin,
+  isSuperadmin,
+  loadSuperadminNames,
+  presentAssigneeForViewer,
+  presentStaffFacingActor,
+  rewriteAssignedBody,
+} from '../services/superadmin.service';
 
 const WARRANTY = ['active', 'expired', 'none', 'unknown'] as const;
 
@@ -109,9 +119,14 @@ function dbCode(error: unknown): string {
   return (error as { code?: string })?.code || '';
 }
 
-function presentListRow(row: Record<string, any>) {
+function presentListRow(
+  row: Record<string, any>,
+  viewer: { role?: string | null } | null | undefined,
+  superadminIds: Set<string>
+) {
   const customer = one(row.customer);
   const issue = one(row.issue_type);
+  const hiddenAssignee = isHiddenSuperadmin(viewer, { id: row.assigned_to, role: null }, superadminIds);
   return {
     id: row.id,
     ticket_no: row.ticket_no,
@@ -119,7 +134,9 @@ function presentListRow(row: Record<string, any>) {
     laptop_model: row.laptop_model,
     serial_number: row.serial_number,
     contact_phone: row.contact_phone,
-    assigned_to: row.assigned_to,
+    assigned_to: hiddenAssignee ? null : row.assigned_to,
+    assignee_name: hiddenAssignee ? TEAM_ACTOR_NAME : null,
+    assignee_locked: hiddenAssignee,
     is_warranty: row.is_warranty,
     warranty_status_at_submit: row.warranty_status_at_submit,
     created_at: row.created_at,
@@ -129,6 +146,25 @@ function presentListRow(row: Record<string, any>) {
       name: displayName(customer) || row.contact_name,
       email: customer?.email || null,
     },
+  };
+}
+
+function presentTicketEvent(
+  event: Record<string, any>,
+  viewer: { role?: string | null } | null | undefined,
+  superadminIds: Set<string>,
+  superadminNames: string[]
+) {
+  const actor = presentStaffFacingActor(
+    viewer,
+    { id: event.actor_id, role: event.actor_role, name: event.actor_role },
+    superadminIds
+  );
+  return {
+    ...event,
+    body: rewriteAssignedBody(event.body, superadminNames, viewer),
+    actor_id: actor.id,
+    actor_role: actor.role,
   };
 }
 
@@ -180,6 +216,21 @@ export async function listTickets(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Enter a real date range.', 400);
     }
 
+    const superadminIds = await getSuperadminIdSet();
+    if (
+      assignedTo
+      && assignedTo !== 'unassigned'
+      && !isSuperadmin(req.user)
+      && superadminIds.has(assignedTo)
+    ) {
+      return paginatedResponse(res, [], {
+        page,
+        limit,
+        total: 0,
+        totalPages: 1,
+      });
+    }
+
     let customerIds: string[] = [];
     if (term) {
       const { data: customers, error: customerError } = await supabaseAdmin
@@ -191,7 +242,9 @@ export async function listTickets(req: AuthRequest, res: Response) {
         logDb('list tickets customer search', customerError);
         return errorResponse(res, 'Failed to load tickets', 500);
       }
-      customerIds = (customers || []).map((customer) => customer.id);
+      customerIds = (customers || [])
+        .map((customer) => customer.id)
+        .filter((id) => isSuperadmin(req.user) || !superadminIds.has(id));
     }
 
     let query = supabaseAdmin
@@ -226,7 +279,7 @@ export async function listTickets(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to load tickets', 500);
     }
     const total = count || 0;
-    return paginatedResponse(res, ((data || []) as Record<string, any>[]).map(presentListRow), {
+    return paginatedResponse(res, ((data || []) as Record<string, any>[]).map((row) => presentListRow(row, req.user, superadminIds)), {
       page,
       limit,
       total,
@@ -300,7 +353,7 @@ export async function getTicket(req: AuthRequest, res: Response) {
         *,
         issue_type:ticket_issue_types!service_tickets_issue_type_id_fkey(id, name),
         customer:users!service_tickets_user_id_fkey(id, full_name, first_name, last_name, email),
-        assignee:users!service_tickets_assigned_to_fkey(id, full_name, first_name, last_name, email),
+        assignee:users!service_tickets_assigned_to_fkey(id, full_name, first_name, last_name, email, role),
         device:devices!service_tickets_device_id_fkey(id, model_name, serial_number, purchase_date, warranty_months, warranty_start),
         order:orders!service_tickets_order_id_fkey(id, order_number),
         events:ticket_events(id, type, from_status, to_status, body, is_internal, actor_id, actor_role, created_at),
@@ -347,14 +400,27 @@ export async function getTicket(req: AuthRequest, res: Response) {
     const device = one(rawDevice);
     const customer = one(rawCustomer);
     const assignee = one(rawAssignee);
+    const superadminIds = await getSuperadminIdSet();
+    const superadminNames = isSuperadmin(req.user) ? [] : await loadSuperadminNames();
+    const presentedAssignee = presentAssigneeForViewer(
+      req.user,
+      assignee
+        ? { id: assignee.id, role: assignee.role, name: displayName(assignee), email: assignee.email }
+        : (ticket.assigned_to ? { id: ticket.assigned_to, role: null, name: null, email: null } : null),
+      superadminIds
+    );
     return successResponse(res, {
       ...ticket,
+      assigned_to: presentedAssignee.id,
       issue_type: one(rawIssue),
       customer: customer ? { ...customer, name: displayName(customer) } : null,
-      assignee: assignee ? { ...assignee, name: displayName(assignee) } : null,
+      assignee: presentedAssignee,
       device: device ? { ...device, warranty: warrantyStatus(device) } : null,
       order: one(rawOrder),
-      events: (rawEvents || []).slice().sort((a: { created_at: string }, b: { created_at: string }) => String(a.created_at).localeCompare(String(b.created_at))),
+      events: (rawEvents || [])
+        .slice()
+        .sort((a: { created_at: string }, b: { created_at: string }) => String(a.created_at).localeCompare(String(b.created_at)))
+        .map((event: Record<string, any>) => presentTicketEvent(event, req.user, superadminIds, superadminNames)),
       media,
       previous_tickets: (previous || []).map((row) => ({
         ticket_no: row.ticket_no,
@@ -558,6 +624,13 @@ export async function assignTicket(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Could not assign this ticket', 500);
     }
     if (!before) return errorResponse(res, 'Ticket not found.', 404);
+    const superadminIds = await getSuperadminIdSet();
+    if (!isSuperadmin(req.user) && before.assigned_to && superadminIds.has(before.assigned_to)) {
+      return errorResponse(res, 'This ticket cannot be reassigned.', 400);
+    }
+    if (parsed.data.user_id && !isSuperadmin(req.user) && superadminIds.has(parsed.data.user_id)) {
+      return errorResponse(res, 'That person cannot be assigned tickets.', 400);
+    }
     if (before.assigned_to === parsed.data.user_id) {
       return successResponse(res, { id, assigned_to: before.assigned_to }, 'Assignee updated.');
     }
@@ -842,13 +915,14 @@ export async function getTicketReceipt(req: AuthRequest, res: Response) {
   }
 }
 
-export async function listAssignees(_req: AuthRequest, res: Response) {
+export async function listAssignees(req: AuthRequest, res: Response) {
   try {
+    const leaderRoles = isSuperadmin(req.user) ? ['admin', 'superadmin'] : ['admin'];
     const [{ data: leaders, error: leaderError }, { data: permissions, error: permissionError }] = await Promise.all([
       supabaseAdmin
         .from('users')
         .select('id, full_name, first_name, last_name, email, role')
-        .in('role', ['admin', 'superadmin']),
+        .in('role', leaderRoles),
       supabaseAdmin
         .from('staff_permissions')
         .select('user_id, can_view, can_edit')

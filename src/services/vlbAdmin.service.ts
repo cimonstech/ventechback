@@ -11,12 +11,12 @@ import {
   InvestorRow,
   PayoutInput,
   PayoutRow,
-  loadAgreementTemplate,
   loadInvestorById,
   loadPayouts,
+  loadPublicDocument,
   presentPayoutDetails,
   presentPayoutRow,
-  publicAgreementTemplateLink,
+  type PublicDocKind,
   updateInvestorPayoutByStaff,
 } from './vlbInvestor.service';
 import {
@@ -35,7 +35,18 @@ type AuditReq = Request & { user?: { id?: string; role?: string } };
 const APP_STATUSES = ['new', 'contacted', 'activated', 'declined'] as const;
 const INVESTMENT_STATUSES = ['active', 'settlement', 'settled', 'renewed'] as const;
 const UPGRADE_STATUSES = ['new', 'contacted', 'done', 'declined'] as const;
-const DOC_KINDS = ['agreement', 'agreement_template', 'receipt', 'statement', 'other'] as const;
+const DOC_KINDS = ['agreement', 'receipt', 'statement', 'other'] as const;
+const PUBLIC_DOC_TITLES: Record<PublicDocKind, string> = {
+  guide: 'Laptop Banking guide',
+  agreement_template: 'Laptop Banking agreement',
+};
+
+function originalPdfName(name: string | undefined): string {
+  const raw = String(name || 'document.pdf').replace(/\\/g, '/');
+  const base = raw.split('/').pop() || 'document.pdf';
+  const cleaned = base.replace(/[^\w.\- ()[\]]+/g, '_').slice(0, 180).trim() || 'document.pdf';
+  return /\.pdf$/i.test(cleaned) ? cleaned : `${cleaned}.pdf`;
+}
 const IMAGE_LIMIT = 10 * 1024 * 1024;
 
 function logDb(scope: string, error: unknown) {
@@ -884,9 +895,6 @@ export async function uploadInvestorDocument(
     investment_id?: string | null;
   }
 ) {
-  if (input.kind === 'agreement_template') {
-    throw new VlbError(400, 'Use the agreement template setting to upload that file.');
-  }
   const investor = await loadInvestorById(investorId);
   const detected = detectTicketFile(input.file.buffer);
   if (!detected || detected.group === 'video') {
@@ -1002,18 +1010,71 @@ async function replaceMatchingDocuments(input: {
   }
 }
 
-export async function getAgreementTemplateAdmin() {
-  try {
-    return await publicAgreementTemplateLink();
-  } catch (error) {
-    if (error instanceof VlbError && error.statusCode === 404) return null;
-    throw error;
-  }
+function presentPublicDocAdmin(row: {
+  id: string;
+  investment_id: string | null;
+  kind: string;
+  title: string;
+  mime: string;
+  size_bytes: number;
+  created_at: string;
+  r2_key: string;
+  url?: string | null;
+}) {
+  return {
+    id: row.id,
+    investment_id: row.investment_id,
+    kind: row.kind,
+    title: row.title,
+    mime: row.mime,
+    size_bytes: row.size_bytes,
+    created_at: row.created_at,
+    url: row.url ?? null,
+  };
 }
 
-export async function uploadAgreementTemplate(
+async function presentSignedPublicDoc(row: {
+  id: string;
+  investment_id: string | null;
+  kind: string;
+  title: string;
+  mime: string;
+  size_bytes: number;
+  created_at: string;
+  r2_key: string;
+}) {
+  let url: string | null = null;
+  try {
+    url = await getSignedViewUrl(row.r2_key);
+  } catch (signError) {
+    logDb('sign public document', signError);
+  }
+  return presentPublicDocAdmin({ ...row, url });
+}
+
+export async function listPublicDocumentsAdmin() {
+  const [guide, agreement] = await Promise.all([
+    loadPublicDocument('guide'),
+    loadPublicDocument('agreement_template'),
+  ]);
+  return {
+    guide: guide ? await presentSignedPublicDoc(guide) : null,
+    agreement_template: agreement ? await presentSignedPublicDoc(agreement) : null,
+  };
+}
+
+export async function getAgreementTemplateAdmin() {
+  const docs = await listPublicDocumentsAdmin();
+  return docs.agreement_template;
+}
+
+export async function uploadPublicDocument(
   req: AuditReq,
-  input: { file: { buffer: Buffer; size: number }; title?: string }
+  input: {
+    kind: PublicDocKind;
+    file: { buffer: Buffer; size: number; originalname?: string };
+    title?: string;
+  }
 ) {
   const detected = detectTicketFile(input.file.buffer);
   if (!detected || detected.group !== 'pdf') {
@@ -1022,15 +1083,16 @@ export async function uploadAgreementTemplate(
   if (input.file.size > IMAGE_LIMIT) {
     throw new VlbError(400, 'Files must be 10 MB or smaller.');
   }
-  const key = `vlb/templates/${randomUUID()}.pdf`;
+  const key = `vlb/public/${input.kind}/${randomUUID()}.pdf`;
   try {
     await putPrivateObject(key, input.file.buffer, detected.mime);
   } catch (error) {
-    logDb('template store', error);
+    logDb('public document store', error);
     throw new VlbError(500, 'Could not store this file.');
   }
-  const existing = await loadAgreementTemplate();
-  const title = (input.title || 'Laptop Banking agreement').trim();
+  const existing = await loadPublicDocument(input.kind);
+  const title = (input.title || originalPdfName(input.file.originalname) || PUBLIC_DOC_TITLES[input.kind]).trim();
+  const now = new Date().toISOString();
   const { data, error } = existing
     ? await supabaseAdmin
       .from('vlb_documents')
@@ -1040,6 +1102,7 @@ export async function uploadAgreementTemplate(
         mime: detected.mime,
         size_bytes: input.file.size,
         uploaded_by: req.user?.id || null,
+        created_at: now,
       })
       .eq('id', existing.id)
       .select('id, investor_id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
@@ -1049,7 +1112,7 @@ export async function uploadAgreementTemplate(
       .insert({
         investor_id: null,
         investment_id: null,
-        kind: 'agreement_template',
+        kind: input.kind,
         title,
         r2_key: key,
         mime: detected.mime,
@@ -1059,11 +1122,11 @@ export async function uploadAgreementTemplate(
       .select('id, investor_id, investment_id, kind, title, mime, size_bytes, created_at, r2_key')
       .single();
   if (error || !data) {
-    logDb('template upsert', error);
+    logDb('public document upsert', error);
     try {
       await deletePrivateObject(key);
     } catch (cleanup) {
-      logDb('template cleanup', cleanup);
+      logDb('public document cleanup', cleanup);
     }
     throw new VlbError(500, 'Could not store this file.');
   }
@@ -1071,32 +1134,30 @@ export async function uploadAgreementTemplate(
     try {
       await deletePrivateObject(existing.r2_key);
     } catch (storageError) {
-      logDb('template replace storage', storageError);
+      logDb('public document replace storage', storageError);
     }
   }
   await logAudit({
     req,
     entity: 'vlb_documents',
     entityId: data.id,
-    action: 'vlb_agreement_template_uploaded',
+    action: input.kind === 'guide' ? 'vlb_guide_uploaded' : 'vlb_agreement_template_uploaded',
     after: { id: data.id, kind: data.kind, title: data.title },
   });
-  let url: string | null = null;
-  try {
-    url = await getSignedViewUrl(data.r2_key);
-  } catch (signError) {
-    logDb('sign template', signError);
-  }
-  return {
-    id: data.id,
-    investment_id: data.investment_id,
-    kind: data.kind,
-    title: data.title,
-    mime: data.mime,
-    size_bytes: data.size_bytes,
-    created_at: data.created_at,
-    url,
-  };
+  return presentSignedPublicDoc(data);
+}
+
+export async function uploadAgreementTemplate(
+  req: AuditReq,
+  input: { file: { buffer: Buffer; size: number; originalname?: string }; title?: string }
+) {
+  return uploadPublicDocument(req, { kind: 'agreement_template', file: input.file, title: input.title });
+}
+
+export async function deletePublicDocument(req: AuditReq, kind: PublicDocKind) {
+  const existing = await loadPublicDocument(kind);
+  if (!existing) throw new VlbError(404, 'No file uploaded for this slot.');
+  return deleteInvestorDocument(req, existing.id);
 }
 
 export async function signAdminDocument(documentId: string) {

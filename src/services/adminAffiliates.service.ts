@@ -224,6 +224,7 @@ export async function approveAffiliate(req: AuditReq, id: string) {
   const activated = await activateAffiliate(row, req);
   const user = await loadUser(activated.user_id);
   const links = presentLinks(activated);
+  const publicInfo = await affiliateSettings.publicInfo();
   try {
     if (user?.email) {
       await emailService.sendEmail(
@@ -234,6 +235,7 @@ export async function approveAffiliate(req: AuditReq, id: string) {
             <p>Hi ${escapeHtml(userName(user))},</p>
             <p>Your VENTECH affiliate account is active. Your code is ${escapeHtml(activated.affiliate_no || '')}.</p>
             ${links?.general ? `<p>Share this link: ${escapeHtml(links.general)}</p>` : ''}
+            <p>${escapeHtml(publicInfo.commission_copy)}</p>
             <p>VENTECH Gadgets</p>
           `,
         },

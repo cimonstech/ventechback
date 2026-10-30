@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { commissionCopy, type CommissionMode, type EligibleScope } from './affiliateCommission.eval';
 import { settingsService } from './settings.service';
 
 const DEFAULTS = {
@@ -6,7 +7,11 @@ const DEFAULTS = {
   affiliate_commission_pesewas: 20000,
   affiliate_activation_mode: 'approval',
   affiliate_fee_refund_on_rejection: true,
-  affiliate_eligible_category_slugs: ['laptops'],
+  affiliate_eligible_scope: 'all' as EligibleScope,
+  affiliate_eligible_category_slugs: [] as string[],
+  affiliate_commission_mode: 'flat' as CommissionMode,
+  affiliate_commission_percent_bp: 0,
+  affiliate_commission_cap_pesewas: null as number | null,
   affiliate_min_order_pesewas: 0,
   affiliate_attribution_days: 30,
   affiliate_return_window_days: 7,
@@ -15,13 +20,18 @@ const DEFAULTS = {
 } as const;
 
 export type AffiliateActivationMode = 'approval' | 'automatic';
+export type { CommissionMode, EligibleScope };
 
 export interface AffiliateSettings {
   feePesewas: number;
   commissionPesewas: number;
   activationMode: AffiliateActivationMode;
   refundFeeOnRejection: boolean;
+  eligibleScope: EligibleScope;
   eligibleCategorySlugs: string[];
+  commissionMode: CommissionMode;
+  percentBp: number;
+  capPesewas: number | null;
   minOrderPesewas: number;
   attributionDays: number;
   returnWindowDays: number;
@@ -49,8 +59,23 @@ function asSlugs(value: string | undefined, fallback: readonly string[]): string
   return value.split(',').map((part) => part.trim().toLowerCase()).filter(Boolean);
 }
 
+function asNullableInt(value: string | undefined): number | null {
+  if (value === undefined || value === '' || value === 'null') return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
 function asMode(value: string | undefined): AffiliateActivationMode {
   return value === 'automatic' ? 'automatic' : 'approval';
+}
+
+function asScope(value: string | undefined): EligibleScope {
+  return value === 'categories' ? 'categories' : 'all';
+}
+
+function asCommissionMode(value: string | undefined): CommissionMode {
+  return value === 'percent' ? 'percent' : 'flat';
 }
 
 async function load(): Promise<AffiliateSettings> {
@@ -63,7 +88,7 @@ async function load(): Promise<AffiliateSettings> {
       .eq('category', 'affiliate');
     if (error) {
       console.error('affiliate settings', error);
-      return cache || { ...fromMap(new Map()) };
+      return cache || fromMap(new Map());
     }
     const map = new Map<string, string>();
     for (const row of data || []) {
@@ -81,12 +106,17 @@ async function load(): Promise<AffiliateSettings> {
 }
 
 function fromMap(map: Map<string, string>): AffiliateSettings {
+  const percentBp = asInt(map.get('affiliate_commission_percent_bp'), DEFAULTS.affiliate_commission_percent_bp);
   return {
     feePesewas: asInt(map.get('affiliate_fee_pesewas'), DEFAULTS.affiliate_fee_pesewas),
     commissionPesewas: asInt(map.get('affiliate_commission_pesewas'), DEFAULTS.affiliate_commission_pesewas),
     activationMode: asMode(map.get('affiliate_activation_mode')),
     refundFeeOnRejection: asBool(map.get('affiliate_fee_refund_on_rejection'), DEFAULTS.affiliate_fee_refund_on_rejection),
+    eligibleScope: asScope(map.get('affiliate_eligible_scope')),
     eligibleCategorySlugs: asSlugs(map.get('affiliate_eligible_category_slugs'), DEFAULTS.affiliate_eligible_category_slugs),
+    commissionMode: asCommissionMode(map.get('affiliate_commission_mode')),
+    percentBp: Math.max(0, Math.min(5000, percentBp)),
+    capPesewas: asNullableInt(map.get('affiliate_commission_cap_pesewas')),
     minOrderPesewas: asInt(map.get('affiliate_min_order_pesewas'), DEFAULTS.affiliate_min_order_pesewas),
     attributionDays: asInt(map.get('affiliate_attribution_days'), DEFAULTS.affiliate_attribution_days),
     returnWindowDays: asInt(map.get('affiliate_return_window_days'), DEFAULTS.affiliate_return_window_days),
@@ -114,6 +144,9 @@ export const affiliateSettings = {
   async eligibleCategorySlugs(): Promise<string[]> {
     return (await load()).eligibleCategorySlugs;
   },
+  async eligibleScope(): Promise<EligibleScope> {
+    return (await load()).eligibleScope;
+  },
   async minOrderPesewas(): Promise<number> {
     return (await load()).minOrderPesewas;
   },
@@ -140,17 +173,28 @@ export const affiliateSettings = {
       affiliate_commission_pesewas: current.commissionPesewas,
       affiliate_activation_mode: current.activationMode,
       affiliate_fee_refund_on_rejection: current.refundFeeOnRejection,
+      affiliate_eligible_scope: current.eligibleScope,
       affiliate_eligible_category_slugs: current.eligibleCategorySlugs,
+      affiliate_commission_mode: current.commissionMode,
+      affiliate_commission_percent_bp: current.percentBp,
+      affiliate_commission_cap_pesewas: current.capPesewas,
       affiliate_min_order_pesewas: current.minOrderPesewas,
       affiliate_attribution_days: current.attributionDays,
       affiliate_return_window_days: current.returnWindowDays,
       affiliate_withdrawal_min_pesewas: current.withdrawalMinPesewas,
       affiliate_payout_change_hold_hours: current.payoutChangeHoldHours,
+      commission_copy: commissionCopy({
+        mode: current.commissionMode,
+        commissionPesewas: current.commissionPesewas,
+        percentBp: current.percentBp,
+        capPesewas: current.capPesewas,
+        minOrderPesewas: current.minOrderPesewas,
+      }),
     };
   },
   async publicInfo() {
     const settings = await load();
-    const slugs = settings.eligibleCategorySlugs;
+    const slugs = settings.eligibleScope === 'categories' ? settings.eligibleCategorySlugs : [];
     let names: string[] = [];
     if (slugs.length) {
       const { data, error } = await supabaseAdmin
@@ -168,7 +212,19 @@ export const affiliateSettings = {
     return {
       fee_pesewas: settings.feePesewas,
       commission_pesewas: settings.commissionPesewas,
+      commission_copy: commissionCopy({
+        mode: settings.commissionMode,
+        commissionPesewas: settings.commissionPesewas,
+        percentBp: settings.percentBp,
+        capPesewas: settings.capPesewas,
+        minOrderPesewas: settings.minOrderPesewas,
+      }),
+      eligible_scope: settings.eligibleScope,
       eligible_category_names: names,
+      commission_mode: settings.commissionMode,
+      commission_percent_bp: settings.percentBp,
+      commission_cap_pesewas: settings.capPesewas,
+      min_order_pesewas: settings.minOrderPesewas,
       min_withdrawal_pesewas: settings.withdrawalMinPesewas,
       payout_methods: ['momo', 'bank'] as const,
       return_window_days: settings.returnWindowDays,
@@ -176,6 +232,16 @@ export const affiliateSettings = {
       fee_refund_on_rejection: settings.refundFeeOnRejection,
       payout_working_days: 3,
     };
+  },
+  async existingCategorySlugs(slugs: string[]): Promise<string[]> {
+    const wanted = [...new Set(slugs.map((slug) => slug.trim().toLowerCase()).filter(Boolean))];
+    if (wanted.length === 0) return [];
+    const { data, error } = await supabaseAdmin.from('categories').select('slug').in('slug', wanted);
+    if (error) {
+      console.error('affiliate category slugs', error);
+      throw error;
+    }
+    return (data || []).map((row) => String(row.slug || '').toLowerCase()).filter(Boolean);
   },
   async save(values: Record<string, string>, userId: string): Promise<AffiliateSettings> {
     const keys = Object.keys(values);

@@ -1,5 +1,10 @@
 import { Router } from 'express';
-import { getPublicAgreementTemplate, getPublicPlans, postApplication } from '../controllers/vlb.controller';
+import {
+  getPublicAgreementTemplate,
+  getPublicDocs,
+  getPublicPlans,
+  postApplication,
+} from '../controllers/vlb.controller';
 import {
   getVlbConfirmationPdf,
   getVlbMe,
@@ -19,19 +24,22 @@ import { contactRateLimiter } from '../middleware/rateLimit.middleware';
 const router = Router();
 const investor = requireProgramRole('investor');
 
-router.get('/plans', getPublicPlans);
-router.get('/agreement-template', getPublicAgreementTemplate);
-router.post('/applications', contactRateLimiter, optionalAuth, requireVlbV3Enabled, postApplication);
+const dashboard = [investor, requireVlbV3Enabled];
 
-router.get('/me', investor, getVlbMe);
-router.get('/me/documents', investor, getVlbMyDocuments);
-router.get('/me/documents/:id', investor, getVlbMyDocument);
-router.patch('/me/payout', investor, patchVlbPayout);
-router.post('/me/upgrade-requests', investor, postVlbUpgradeRequest);
-router.get('/me/investments/:id/statement.pdf', investor, getVlbStatementPdf);
-router.get('/me/investments/:id/confirmation.pdf', investor, getVlbConfirmationPdf);
-router.get('/me/payouts/:id/receipt.pdf', investor, getVlbPayoutReceiptPdf);
-router.post('/me/investments/:id/renewal', investor, postVlbRenewal);
-router.get('/me/investments/:id', investor, getVlbMyInvestment);
+router.get('/plans', getPublicPlans);
+router.get('/public-docs', getPublicDocs);
+router.get('/agreement-template', getPublicAgreementTemplate);
+router.post('/applications', contactRateLimiter, optionalAuth, postApplication);
+
+router.get('/me', ...dashboard, getVlbMe);
+router.get('/me/documents', ...dashboard, getVlbMyDocuments);
+router.get('/me/documents/:id', ...dashboard, getVlbMyDocument);
+router.patch('/me/payout', ...dashboard, patchVlbPayout);
+router.post('/me/upgrade-requests', ...dashboard, postVlbUpgradeRequest);
+router.get('/me/investments/:id/statement.pdf', ...dashboard, getVlbStatementPdf);
+router.get('/me/investments/:id/confirmation.pdf', ...dashboard, getVlbConfirmationPdf);
+router.get('/me/payouts/:id/receipt.pdf', ...dashboard, getVlbPayoutReceiptPdf);
+router.post('/me/investments/:id/renewal', ...dashboard, postVlbRenewal);
+router.get('/me/investments/:id', ...dashboard, getVlbMyInvestment);
 
 export default router;

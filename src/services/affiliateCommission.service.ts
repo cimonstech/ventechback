@@ -5,11 +5,18 @@ import { emailService } from './email.service';
 import { affiliateSettings } from './affiliateSettings.service';
 import { AffiliateError } from './affiliate.service';
 import { tryStartPreorderWarrantiesForOrder } from './deviceRegistration.service';
+import {
+  evaluateCommission,
+  ghsToPesewas,
+  type CommissionItem,
+  type SkipReason,
+} from './affiliateCommission.eval';
 
 type AuditReq = Request & { user?: { id?: string; role?: string } };
 
 interface OrderItemLike {
   product_id?: string | null;
+  total_price?: number | string | null;
 }
 
 export interface CheckoutOrder {
@@ -17,9 +24,11 @@ export interface CheckoutOrder {
   affiliate_id?: string | null;
   referral_click_id?: string | null;
   total?: number | string | null;
+  discount?: number | string | null;
   payment_status?: string | null;
   status?: string | null;
   delivered_at?: string | null;
+  affiliate_skip_reason?: SkipReason | null;
   shipping_address?: { payment_reference?: string | null } | null;
   order_items?: OrderItemLike[] | null;
 }
@@ -41,12 +50,6 @@ function logDb(scope: string, error: unknown) {
 
 function isUniqueViolation(error: unknown): boolean {
   return !!(error && typeof error === 'object' && (error as { code?: string }).code === '23505');
-}
-
-function ghsToPesewas(value: number | string | null | undefined): number {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return 0;
-  return Math.round(amount * 100);
 }
 
 function paymentReferenceOf(order: CheckoutOrder): string | null {
@@ -105,38 +108,92 @@ function productIdsOf(orders: CheckoutOrder[]): string[] {
   return [...ids];
 }
 
-export async function eligibleForCommission(checkoutOrders: CheckoutOrder[]): Promise<boolean> {
-  if (!checkoutOrders.length) return false;
-  const settings = await affiliateSettings.get();
-  const checkoutPesewas = checkoutOrders.reduce((sum, order) => sum + ghsToPesewas(order.total), 0);
-  if (checkoutPesewas < settings.minOrderPesewas) return false;
+const ORDER_SELECT =
+  'id, affiliate_id, referral_click_id, total, discount, payment_status, status, delivered_at, shipping_address, affiliate_skip_reason, order_items:order_items(product_id, total_price)';
 
-  const categoryIds = await eligibleCategoryIds(settings.eligibleCategorySlugs);
-  if (categoryIds.size === 0) return false;
-
-  const products = await productCategoryMap(productIdsOf(checkoutOrders));
-  for (const order of checkoutOrders) {
+function itemsOf(
+  orders: CheckoutOrder[],
+  products: Map<string, string | null>
+): CommissionItem[] {
+  const items: CommissionItem[] = [];
+  for (const order of orders) {
     for (const item of order.order_items || []) {
-      const categoryId = item.product_id ? products.get(item.product_id) : null;
-      if (categoryId && categoryIds.has(categoryId)) return true;
+      items.push({
+        categoryId: item.product_id ? products.get(item.product_id) || null : null,
+        totalPricePesewas: ghsToPesewas(item.total_price),
+      });
     }
   }
-  return false;
+  return items;
+}
+
+async function evaluateOrders(orders: CheckoutOrder[]) {
+  const settings = await affiliateSettings.get();
+  let categoryIds = new Set<string>();
+  if (settings.eligibleScope === 'categories') {
+    if (settings.eligibleCategorySlugs.length === 0) {
+      console.error('affiliate commission settings: eligible category list is empty');
+      categoryIds = new Set();
+    } else {
+      categoryIds = await eligibleCategoryIds(settings.eligibleCategorySlugs);
+      if (categoryIds.size === 0) {
+        console.error(
+          'affiliate commission settings: eligible category slugs matched no categories',
+          settings.eligibleCategorySlugs
+        );
+      }
+    }
+  }
+  const products = await productCategoryMap(productIdsOf(orders));
+  const discountPesewas = orders.reduce((sum, order) => sum + ghsToPesewas(order.discount), 0);
+  const selfReferral = orders.some((order) => order.affiliate_skip_reason === 'self_referral');
+  const result = evaluateCommission({
+    selfReferral,
+    items: itemsOf(orders, products),
+    orderDiscountPesewas: discountPesewas,
+    settings: {
+      eligibleScope: settings.eligibleScope,
+      eligibleCategoryIds: categoryIds,
+      commissionMode: settings.commissionMode,
+      commissionPesewas: settings.commissionPesewas,
+      percentBp: settings.percentBp,
+      capPesewas: settings.capPesewas,
+      minOrderPesewas: settings.minOrderPesewas,
+    },
+  });
+  return { settings, products, categoryIds, result };
+}
+
+export async function eligibleForCommission(checkoutOrders: CheckoutOrder[]): Promise<boolean> {
+  if (!checkoutOrders.length) return false;
+  const { result } = await evaluateOrders(checkoutOrders);
+  return result.skipReason === null && result.amountPesewas > 0;
 }
 
 async function firstEligibleOrder(
   checkoutOrders: CheckoutOrder[],
   categoryIds: Set<string>,
-  products: Map<string, string | null>
+  products: Map<string, string | null>,
+  scope: 'all' | 'categories'
 ): Promise<CheckoutOrder | null> {
   for (const order of checkoutOrders) {
     if (!order.affiliate_id) continue;
+    if (scope === 'all') return order;
     for (const item of order.order_items || []) {
       const categoryId = item.product_id ? products.get(item.product_id) : null;
       if (categoryId && categoryIds.has(categoryId)) return order;
     }
   }
-  return null;
+  return checkoutOrders.find((order) => order.affiliate_id) || null;
+}
+
+async function recordSkipReason(orderIds: string[], reason: SkipReason) {
+  if (orderIds.length === 0) return;
+  const { error } = await supabaseAdmin
+    .from('orders')
+    .update({ affiliate_skip_reason: reason })
+    .in('id', orderIds);
+  if (error) logDb('record affiliate skip reason', error);
 }
 
 async function loadAffiliateUser(affiliateId: string) {
@@ -211,7 +268,7 @@ async function loadOrdersWithItems(ids: string[]): Promise<CheckoutOrder[]> {
   if (ids.length === 0) return [];
   const { data, error } = await supabaseAdmin
     .from('orders')
-    .select('id, affiliate_id, referral_click_id, total, payment_status, status, delivered_at, shipping_address, order_items:order_items(product_id)')
+    .select(ORDER_SELECT)
     .in('id', ids);
   if (error) {
     logDb('load orders for commission', error);
@@ -228,7 +285,7 @@ export async function loadCheckoutOrders(order: CheckoutOrder): Promise<Checkout
   }
   const { data, error } = await supabaseAdmin
     .from('orders')
-    .select('id, affiliate_id, referral_click_id, total, payment_status, status, delivered_at, shipping_address, order_items:order_items(product_id)')
+    .select(ORDER_SELECT)
     .eq('shipping_address->>payment_reference', paymentRef);
   if (error) {
     logDb('load checkout orders', error);
@@ -258,14 +315,19 @@ export async function createPendingCommission(input: {
 
   const attributed = orders.filter((order) => order.affiliate_id);
   if (attributed.length === 0) return null;
-  if (!(await eligibleForCommission(orders))) return null;
 
-  const settings = await affiliateSettings.get();
-  if (settings.commissionPesewas <= 0) return null;
+  const { settings, products, categoryIds, result } = await evaluateOrders(attributed);
+  const attributedIds = attributed.map((order) => order.id);
+  if (result.skipReason) {
+    await recordSkipReason(attributedIds, result.skipReason);
+    return null;
+  }
+  if (result.amountPesewas <= 0) {
+    await recordSkipReason(attributedIds, 'settings_error');
+    return null;
+  }
 
-  const categoryIds = await eligibleCategoryIds(settings.eligibleCategorySlugs);
-  const products = await productCategoryMap(productIdsOf(orders));
-  const order = await firstEligibleOrder(attributed, categoryIds, products);
+  const order = await firstEligibleOrder(attributed, categoryIds, products, settings.eligibleScope);
   if (!order?.affiliate_id) return null;
 
   const { data: affiliate, error: affiliateError } = await supabaseAdmin
@@ -283,7 +345,7 @@ export async function createPendingCommission(input: {
     affiliate_id: order.affiliate_id,
     order_id: order.id,
     checkout_reference: checkoutReference,
-    amount_pesewas: settings.commissionPesewas,
+    amount_pesewas: result.amountPesewas,
     status: 'pending',
   };
 
@@ -307,6 +369,11 @@ export async function createPendingCommission(input: {
   }
 
   const row = data as CommissionRow;
+  const { error: clearError } = await supabaseAdmin
+    .from('orders')
+    .update({ affiliate_skip_reason: null })
+    .in('id', attributedIds);
+  if (clearError) logDb('clear affiliate skip reason', clearError);
   await logAudit({
     req,
     entity: 'affiliate_commission',
@@ -347,7 +414,7 @@ export async function maybeCreateCommissionForPayment(
     if (!paymentReference) return;
     const { data, error } = await supabaseAdmin
       .from('orders')
-      .select('id, affiliate_id, referral_click_id, total, payment_status, status, delivered_at, shipping_address, order_items:order_items(product_id)')
+      .select(ORDER_SELECT)
       .eq('shipping_address->>payment_reference', paymentReference);
     if (error) {
       logDb('load payment orders for commission', error);
@@ -434,6 +501,8 @@ export async function maybeReverseCommission(
       return;
     }
     if (!commission) return;
+
+    await recordSkipReason([order.id], 'refunded');
 
     if (commission.status === 'pending') {
       const { data: updated, error: updateError } = await supabaseAdmin

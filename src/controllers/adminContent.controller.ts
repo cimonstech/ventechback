@@ -7,6 +7,7 @@ import { logAudit } from '../services/audit.service';
 import { sanitizeContentHtml } from '../services/sanitize.service';
 import { pathsForContentPage, revalidateContent } from '../services/revalidate.service';
 import { OPERATING_SYSTEMS, PRODUCT_CONDITIONS } from '../services/contentGuides.service';
+import { TEAM_ACTOR_NAME, getSuperadminIdSet, isSuperadmin, maskStaffUserIds } from '../services/superadmin.service';
 
 const ARTICLE_TYPES = [
   'user_guide',
@@ -752,7 +753,7 @@ export async function listFaqs(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to load FAQs', 500);
     }
 
-    return successResponse(res, data || []);
+    return successResponse(res, await maskStaffUserIds(req.user, data || [], ['updated_by']));
   } catch (error) {
     logDb('list faqs', error);
     return errorResponse(res, 'Failed to load FAQs', 500);
@@ -901,7 +902,7 @@ export function reorderFaqs(req: AuthRequest, res: Response) {
   return reorderRows(req, res, 'faqs', 'faq', ['/faq']);
 }
 
-export async function listPages(_req: AuthRequest, res: Response) {
+export async function listPages(req: AuthRequest, res: Response) {
   try {
     const { data, error } = await supabaseAdmin
       .from('content_pages')
@@ -913,7 +914,7 @@ export async function listPages(_req: AuthRequest, res: Response) {
       return errorResponse(res, 'Failed to load pages', 500);
     }
 
-    return successResponse(res, data || []);
+    return successResponse(res, await maskStaffUserIds(req.user, data || [], ['updated_by']));
   } catch (error) {
     logDb('list pages', error);
     return errorResponse(res, 'Failed to load pages', 500);
@@ -940,7 +941,13 @@ export async function getPage(req: AuthRequest, res: Response) {
     if (!data) return errorResponse(res, 'Page not found', 404);
 
     let updatedByName: string | null = null;
-    if (data.updated_by) {
+    let updatedBy = data.updated_by as string | null;
+    const superadminIds = await getSuperadminIdSet();
+    const hideEditor = !isSuperadmin(req.user) && !!updatedBy && superadminIds.has(updatedBy);
+    if (hideEditor) {
+      updatedBy = null;
+      updatedByName = TEAM_ACTOR_NAME;
+    } else if (data.updated_by) {
       const { data: editor, error: editorError } = await supabaseAdmin
         .from('users')
         .select('full_name, first_name, last_name')
@@ -956,7 +963,7 @@ export async function getPage(req: AuthRequest, res: Response) {
       }
     }
 
-    return successResponse(res, { ...data, updated_by_name: updatedByName });
+    return successResponse(res, { ...data, updated_by: updatedBy, updated_by_name: updatedByName });
   } catch (error) {
     logDb('get page', error);
     return errorResponse(res, 'Failed to load page', 500);

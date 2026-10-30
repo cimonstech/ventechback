@@ -440,7 +440,10 @@ export async function getMine(req: AuthRequest, res: Response) {
     const events = (data.events || [])
       .filter((event) => event.is_internal === false)
       .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-      .map(({ is_internal: _internal, ...event }) => event);
+      .map(({ is_internal: _internal, actor_role, ...event }) => ({
+        ...event,
+        actor_role: actor_role === 'customer' ? 'customer' : null,
+      }));
     let media: Array<Record<string, unknown>> = [];
     try {
       const signed = await signedMedia((data.media || []).slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))));

@@ -20,6 +20,7 @@ import {
   suspendAffiliate,
   updateWithdrawalStatus,
 } from '../services/adminAffiliates.service';
+import { affiliateSettings } from '../services/affiliateSettings.service';
 import { errorResponse, paginatedResponse, successResponse } from '../utils/responseHandlers';
 
 const STATUSES = ['awaiting_payment', 'pending', 'active', 'suspended', 'rejected'] as const;
@@ -46,7 +47,11 @@ const settingsSchema = z
     affiliate_commission_pesewas: z.number().int().min(1).max(10_000_000).optional(),
     affiliate_activation_mode: z.enum(['approval', 'automatic']).optional(),
     affiliate_fee_refund_on_rejection: z.boolean().optional(),
-    affiliate_eligible_category_slugs: z.array(z.string().trim().min(1).max(80)).min(1).max(40).optional(),
+    affiliate_eligible_scope: z.enum(['all', 'categories']).optional(),
+    affiliate_eligible_category_slugs: z.array(z.string().trim().min(1).max(80)).max(40).optional(),
+    affiliate_commission_mode: z.enum(['flat', 'percent']).optional(),
+    affiliate_commission_percent_bp: z.number().int().min(0).max(5000).optional(),
+    affiliate_commission_cap_pesewas: z.number().int().min(1).max(100_000_000).nullable().optional(),
     affiliate_min_order_pesewas: z.number().int().min(0).max(100_000_000).optional(),
     affiliate_attribution_days: z.number().int().min(1).max(365).optional(),
     affiliate_return_window_days: z.number().int().min(0).max(90).optional(),
@@ -97,8 +102,21 @@ function settingsToStrings(body: z.infer<typeof settingsSchema>): Record<string,
   if (body.affiliate_fee_refund_on_rejection !== undefined) {
     out.affiliate_fee_refund_on_rejection = body.affiliate_fee_refund_on_rejection ? 'true' : 'false';
   }
+  if (body.affiliate_eligible_scope !== undefined) {
+    out.affiliate_eligible_scope = body.affiliate_eligible_scope;
+  }
   if (body.affiliate_eligible_category_slugs !== undefined) {
     out.affiliate_eligible_category_slugs = body.affiliate_eligible_category_slugs.join(',');
+  }
+  if (body.affiliate_commission_mode !== undefined) {
+    out.affiliate_commission_mode = body.affiliate_commission_mode;
+  }
+  if (body.affiliate_commission_percent_bp !== undefined) {
+    out.affiliate_commission_percent_bp = String(body.affiliate_commission_percent_bp);
+  }
+  if (body.affiliate_commission_cap_pesewas !== undefined) {
+    out.affiliate_commission_cap_pesewas =
+      body.affiliate_commission_cap_pesewas == null ? '' : String(body.affiliate_commission_cap_pesewas);
   }
   if (body.affiliate_min_order_pesewas !== undefined) {
     out.affiliate_min_order_pesewas = String(body.affiliate_min_order_pesewas);
@@ -331,6 +349,22 @@ export async function adminPutSettings(req: AuthRequest, res: Response) {
   try {
     const parsed = settingsSchema.safeParse(req.body);
     if (!parsed.success) return errorResponse(res, formMessage(parsed.error), 400);
+    const current = await affiliateSettings.get();
+    const scope = parsed.data.affiliate_eligible_scope || current.eligibleScope;
+    const slugs =
+      parsed.data.affiliate_eligible_category_slugs !== undefined
+        ? parsed.data.affiliate_eligible_category_slugs.map((slug) => slug.trim().toLowerCase()).filter(Boolean)
+        : current.eligibleCategorySlugs;
+    if (scope === 'categories') {
+      if (slugs.length === 0) {
+        return errorResponse(res, 'Choose at least one category.', 400);
+      }
+      const existing = await affiliateSettings.existingCategorySlugs(slugs);
+      const missing = slugs.filter((slug) => !existing.includes(slug));
+      if (missing.length) {
+        return errorResponse(res, 'Those categories were not found.', 400);
+      }
+    }
     const data = await saveSettings(req, settingsToStrings(parsed.data));
     return successResponse(res, data, 'Settings saved.');
   } catch (error) {
