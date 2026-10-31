@@ -270,7 +270,7 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
         if (inviteError || !invited?.user) {
           const already = inviteError?.message?.toLowerCase().includes('already');
           if (!already) {
-            return errorResponse(res, inviteError?.message || 'Failed to invite staff member', 400);
+            return errorResponse(res, 'Could not invite this person.', 400);
           }
           const found = await findAuthUserByEmail(email);
           if (!found) {

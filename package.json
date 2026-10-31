@@ -8,7 +8,7 @@
     "dev:clean": "kill-port.bat && nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --require ts-node/register/transpile-only --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts"
+    "test": "node --require ts-node/register/transpile-only --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts src/services/paystack.status.test.ts"
   },
   "keywords": [
     "ecommerce",

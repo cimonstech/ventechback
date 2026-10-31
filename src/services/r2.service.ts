@@ -77,7 +77,7 @@ export const uploadToR2 = async (
     console.error('Error uploading to R2:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Upload failed',
+      error: 'Could not upload this file.',
     };
   }
 };
@@ -110,7 +110,7 @@ export const uploadMultipleToR2 = async (
     console.error('Error uploading multiple files to R2:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Upload failed',
+      error: 'Could not upload this file.',
     };
   }
 };
@@ -158,7 +158,7 @@ export const deleteFromR2 = async (fileUrl: string): Promise<{ success: boolean;
     console.error('Error deleting from R2:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Delete failed',
+      error: 'Could not delete this file.',
     };
   }
 };
@@ -226,7 +226,7 @@ export const listR2Files = async (
     console.error('Error listing R2 files:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to list files',
+      error: 'Could not load files.',
     };
   }
 };

@@ -3,8 +3,9 @@ import { Request, Response } from 'express';
 import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { PricingError, priceOrder } from '../services/pricing.service';
+import { PricingError, priceOrder, shopperPricingMessage } from '../services/pricing.service';
 import { AffiliateError, applyAffiliateFeePaid } from '../services/affiliate.service';
+import { mapPaystackChargeStatus, paystackChargeMessage } from '../services/paystack.status';
 import { maybeCreateCommissionForPayment } from '../services/affiliateCommission.service';
 import { tryCreatePendingDevicesForOrder } from '../services/deviceRegistration.service';
 
@@ -34,9 +35,10 @@ export class PaymentController {
 
       const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
       if (!paystackSecretKey) {
+        console.error('Paystack secret key not configured');
         return res.status(500).json({
           success: false,
-          message: 'Paystack secret key not configured',
+          message: "We couldn't start your payment. Please try again.",
         });
       }
 
@@ -131,34 +133,32 @@ export class PaymentController {
           message: 'Transaction initialized successfully',
         });
       } else {
+        console.error('Paystack initialize returned status false:', response.data);
         return res.status(400).json({
           success: false,
-          message: response.data.message || 'Failed to initialize transaction',
+          message: "We couldn't start your payment. Please try again.",
         });
       }
     } catch (error: any) {
       if (error instanceof PricingError) {
         return res.status(error.statusCode).json({
           success: false,
-          message: error.message,
-          error: error.code,
+          message: shopperPricingMessage(error),
         });
       }
 
       console.error('Error initializing Paystack transaction:', error);
       return res.status(500).json({
         success: false,
-        message: error.response?.data?.message || 'Failed to initialize transaction',
-        error: error.message,
+        message: "We couldn't start your payment. Please try again.",
       });
     }
   }
 
   // Verify Paystack transaction
   async verifyTransaction(req: Request, res: Response) {
+    const reference = typeof req.body?.reference === 'string' ? req.body.reference : '';
     try {
-      const { reference } = req.body;
-
       if (!reference) {
         return res.status(400).json({
           success: false,
@@ -168,9 +168,10 @@ export class PaymentController {
 
       const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
       if (!paystackSecretKey) {
+        console.error('Paystack secret key not configured');
         return res.status(500).json({
           success: false,
-          message: 'Paystack secret key not configured',
+          message: "We couldn't confirm this payment. Please try again.",
         });
       }
 
@@ -188,7 +189,8 @@ export class PaymentController {
         const transaction = response.data.data;
 
         // Verify transaction status and amount
-        const isSuccessful = transaction.status === 'success';
+        const chargeStatus = mapPaystackChargeStatus(transaction.status);
+        const isSuccessful = chargeStatus === 'success';
         const verifiedAmount = transaction.amount;
 
         // Save transaction to database for tracking
@@ -325,34 +327,48 @@ export class PaymentController {
           // Don't fail the request if DB save fails
         }
 
-        // Return response with metadata for frontend to use
-        return res.json({
-          success: isSuccessful,
+        const shopperReference = transaction.reference || reference;
+        return res.status(200).json({
+          success: true,
           data: {
-            reference: transaction.reference,
-            status: transaction.status, // 'success' if payment successful
-            amount: verifiedAmount, // ⚠️ Amount in pesewas - DO NOT use directly for order totals
-            amount_ghs: verifiedAmount / 100, // ✅ Converted to GHS for reference only
-            currency: transaction.currency,
-            customer: transaction.customer,
-            metadata: transaction.metadata || {}, // Include metadata (checkout_data, user_id, etc.)
-            paid_at: transaction.paid_at,
-            created_at: transaction.created_at,
+            reference: shopperReference,
+            status: chargeStatus,
           },
-          message: isSuccessful ? 'Transaction verified successfully' : 'Transaction verification failed',
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'Transaction verification failed',
+          message: paystackChargeMessage(chargeStatus, shopperReference),
         });
       }
+
+      const unknownStatus = mapPaystackChargeStatus('failed');
+      return res.status(200).json({
+        success: true,
+        data: {
+          reference,
+          status: unknownStatus,
+        },
+        message: paystackChargeMessage(unknownStatus, reference),
+      });
     } catch (error: any) {
       console.error('Error verifying Paystack transaction:', error);
+      const paystackStatus = error?.response?.status;
+      if (paystackStatus === 429) {
+        const retryAfter = error?.response?.headers?.['retry-after'];
+        if (retryAfter) res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({
+          success: false,
+          message: 'Too many requests. Wait a moment and try again.',
+        });
+      }
+      if (paystackStatus && paystackStatus >= 400 && paystackStatus < 500) {
+        return res.status(200).json({
+          success: true,
+          data: { reference, status: 'failed' },
+          message: paystackChargeMessage('failed', reference),
+        });
+      }
       const paystackFailed = Boolean(error?.isAxiosError || error?.response || error?.request);
       return res.status(paystackFailed ? 502 : 500).json({
         success: false,
-        message: "We couldn't verify this payment. If you were charged, please contact support with your reference.",
+        message: "We couldn't confirm your payment yet. If you were charged, contact support with your payment reference. You won't be charged twice.",
       });
     }
   }
@@ -366,7 +382,7 @@ export class PaymentController {
         console.error('Paystack secret key not configured');
         return res.status(500).json({
           success: false,
-          message: 'Paystack secret key not configured',
+          message: 'Payment provider is not available.',
         });
       }
 

@@ -9,24 +9,24 @@ export const errorHandler = (
   console.error('Error:', req.originalUrl, err);
 
   const statusCode = err.statusCode || 500;
-  const isProduction = process.env.NODE_ENV === 'production';
-  const message = statusCode >= 500 && isProduction
-    ? 'Something went wrong. Please try again in a moment.'
-    : (err.message || 'Internal Server Error');
+  const message =
+    statusCode === 404
+      ? "We couldn't find that."
+      : statusCode === 429
+        ? 'Too many requests. Wait a moment and try again.'
+        : statusCode >= 500
+          ? 'Something went wrong. Please try again in a moment.'
+          : 'Something went wrong. Please try again.';
 
   res.status(statusCode).json({
     success: false,
     message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };
 
 export const notFound = (req: Request, res: Response, next: NextFunction) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`,
+    message: "We couldn't find that.",
   });
 };
-
-
-

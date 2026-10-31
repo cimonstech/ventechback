@@ -6,6 +6,7 @@ import {
   PricingError,
   isValidPaymentReference,
   priceOrder,
+  shopperPricingMessage,
   verifyPaystackPayment,
 } from '../services/pricing.service';
 import { ghsToPesewas, paymentCoversOrderTotals } from '../services/pricing.money';
@@ -72,7 +73,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to fetch orders',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -498,7 +498,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to update order status',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -573,7 +572,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to update payment status',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -762,7 +760,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to cancel order',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -1525,12 +1522,10 @@ export class OrderController {
       });
     } catch (error: any) {
       if (error instanceof PricingError) {
-        console.warn(`⚠️ Order rejected (${error.code}): ${error.message}`);
+        console.warn(`⚠️ Order rejected (${error.code}): ${error.message}`, error.extra);
         return res.status(error.statusCode).json({
           success: false,
-          message: error.message,
-          error: error.code,
-          ...error.extra,
+          message: shopperPricingMessage(error),
         });
       }
 
@@ -1545,10 +1540,7 @@ export class OrderController {
       });
       res.status(500).json({
         success: false,
-        message: 'Failed to create order',
-        error: error instanceof Error ? error.message : (error?.message || 'Unknown error'),
-        details: error?.details || error?.hint || undefined,
-        code: error?.code || undefined,
+        message: 'We could not place this order. Please try again.',
       });
     }
   }
@@ -1608,7 +1600,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to send wishlist reminder',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -1648,7 +1639,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to send cart abandonment reminder',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -1745,7 +1735,6 @@ export class OrderController {
       res.status(500).json({
         success: false,
         message: 'Failed to generate order PDF',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }

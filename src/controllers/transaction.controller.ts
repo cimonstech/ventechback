@@ -43,7 +43,6 @@ export class TransactionController {
       res.status(500).json({
         success: false,
         message: 'Failed to fetch transactions',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -74,7 +73,6 @@ export class TransactionController {
       res.status(500).json({
         success: false,
         message: 'Failed to fetch transaction',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -175,7 +173,6 @@ export class TransactionController {
       res.status(500).json({
         success: false,
         message: 'Failed to refund transaction',
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }

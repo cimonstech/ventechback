@@ -42,33 +42,16 @@ export const getBannersByType = async (req: Request, res: Response) => {
     const { data, error } = await query;
 
     if (error) {
-      // Provide more detailed error information
-      const errorDetails = {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      };
-      console.error('Get banners error:', errorDetails);
-      throw new Error(`Failed to fetch banners: ${error.message || 'Unknown error'}`);
+      console.error('Get banners error:', error);
+      throw error;
     }
 
     // Return all active banners (no type column to filter by)
     // The frontend can filter by type client-side if needed
     return successResponse(res, data || []);
   } catch (error: any) {
-    // Improved error handling
-    const errorMessage = error?.message || 'Failed to fetch banners';
-    const errorDetails = error?.details || error?.stack || '';
-    
-    console.error('Get banners error:', {
-      message: errorMessage,
-      details: errorDetails,
-      hint: error?.hint || '',
-      code: error?.code || '',
-    });
-    
-    return errorResponse(res, errorMessage);
+    console.error('Get banners error:', error);
+    return errorResponse(res, 'Could not load banners.');
   }
 };
 
@@ -102,7 +85,7 @@ export const getAllBanners = async (req: AuthRequest, res: Response) => {
     return successResponse(res, data || []);
   } catch (error: any) {
     console.error('Get all banners error:', error);
-    return errorResponse(res, error.message);
+    return errorResponse(res, 'Could not load banners.');
   }
 };
 
@@ -142,7 +125,7 @@ export const createBanner = async (req: AuthRequest, res: Response) => {
     return successResponse(res, data, 'Banner created successfully', 201);
   } catch (error: any) {
     console.error('Create banner error:', error);
-    return errorResponse(res, error.message);
+    return errorResponse(res, 'Could not save this banner.');
   }
 };
 
@@ -196,7 +179,7 @@ export const updateBanner = async (req: AuthRequest, res: Response) => {
     return successResponse(res, data, 'Banner updated successfully');
   } catch (error: any) {
     console.error('Update banner error:', error);
-    return errorResponse(res, error.message);
+    return errorResponse(res, 'Could not save this banner.');
   }
 };
 
@@ -211,7 +194,7 @@ export const deleteBanner = async (req: AuthRequest, res: Response) => {
     return successResponse(res, null, 'Banner deleted successfully');
   } catch (error: any) {
     console.error('Delete banner error:', error);
-    return errorResponse(res, error.message);
+    return errorResponse(res, 'Could not delete this banner.');
   }
 };
 

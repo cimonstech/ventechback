@@ -29,6 +29,37 @@ export class PricingError extends Error {
   }
 }
 
+function looksLikeInfrastructure(text: string): boolean {
+  return /column|constraint|relation|hint|sqlstate|paystack|postgres|permission denied|secret key/i.test(text);
+}
+
+export function shopperPricingMessage(error: PricingError): string {
+  switch (error.code) {
+    case 'PRODUCTS_NOT_FOUND':
+    case 'PRODUCT_NOT_FOUND':
+      return 'Some products in your cart are no longer available. Remove them and try again.';
+    case 'INVALID_QUANTITY':
+    case 'INVALID_PRODUCT_IDS':
+    case 'INVALID_VARIANT':
+      return 'Please check your cart and try again.';
+    case 'VARIANT_UNAVAILABLE':
+      return 'An option you selected is no longer available. Update your cart and try again.';
+    case 'INVALID_PRICE':
+      return "We couldn't price this order. Please try again.";
+    case 'COUPON_INVALID':
+      return error.message && !looksLikeInfrastructure(error.message)
+        ? error.message
+        : 'That coupon does not apply to this cart.';
+    case 'PAYSTACK_NOT_CONFIGURED':
+    case 'PAYMENT_VERIFICATION_FAILED':
+      return "We couldn't confirm your payment yet. If you were charged, contact support with your payment reference. You won't be charged twice.";
+    case 'PAYMENT_NOT_SUCCESSFUL':
+      return "This payment didn't go through. You haven't been charged.";
+    default:
+      return "We couldn't complete this order. Please try again.";
+  }
+}
+
 interface RequestedItem {
   product_id: string;
   quantity: number;

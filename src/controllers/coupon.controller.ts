@@ -28,7 +28,6 @@ export class CouponController {
         return res.status(500).json({
           success: false,
           message: 'Failed to validate coupon',
-          error: error.message,
         });
       }
 
@@ -60,7 +59,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to validate coupon',
-        error: error.message,
       });
     }
   }
@@ -84,7 +82,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch coupons',
-        error: error.message,
       });
     }
   }
@@ -111,7 +108,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch coupon',
-        error: error.message,
       });
     }
   }
@@ -194,7 +190,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to create coupon',
-        error: error.message,
       });
     }
   }
@@ -259,7 +254,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to update coupon',
-        error: error.message,
       });
     }
   }
@@ -285,7 +279,6 @@ export class CouponController {
       return res.status(500).json({
         success: false,
         message: 'Failed to delete coupon',
-        error: error.message,
       });
     }
   }

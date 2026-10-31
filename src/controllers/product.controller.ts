@@ -43,6 +43,8 @@ export const getAllProducts = async (req: Request, res: Response) => {
       search,
       sortBy = 'created_at',
       sortOrder = 'desc',
+      operating_system,
+      condition,
     } = req.query;
 
     const parsedPage = parseInt(String(page), 10);
@@ -136,6 +138,18 @@ export const getAllProducts = async (req: Request, res: Response) => {
       countQuery = countQuery.or(searchFilter);
     }
 
+    const osValue = Array.isArray(operating_system) ? operating_system[0] : operating_system;
+    if (typeof osValue === 'string' && osValue.trim()) {
+      query = query.eq('operating_system', osValue.trim());
+      countQuery = countQuery.eq('operating_system', osValue.trim());
+    }
+
+    const conditionValue = Array.isArray(condition) ? condition[0] : condition;
+    if (typeof conditionValue === 'string' && conditionValue.trim()) {
+      query = query.eq('condition', conditionValue.trim());
+      countQuery = countQuery.eq('condition', conditionValue.trim());
+    }
+
     // Apply sorting
     const ascending = String(sortOrder) === 'asc';
     query = query.order(sortColumn, { ascending });
@@ -173,57 +187,9 @@ export const getAllProducts = async (req: Request, res: Response) => {
       totalPages: Math.ceil((count || 0) / limitNum),
     });
   } catch (error: any) {
-    console.error('Get products error - Full error object:', error);
-    console.error('Get products error - Error type:', typeof error);
-    console.error('Get products error - Error message:', error?.message);
-    console.error('Get products error - Error details:', error?.details);
-    console.error('Get products error - Error hint:', error?.hint);
-    console.error('Get products error - Error code:', error?.code);
-    
-    // Extract error message properly - prioritize details/hint over message
-    let errorMessage = 'Failed to fetch products';
-    
-    if (error) {
-      // Prefer details or hint as they're usually more descriptive and less likely to be double-encoded
-      if (error.details && typeof error.details === 'string') {
-        errorMessage = error.details;
-      } else if (error.hint && typeof error.hint === 'string') {
-        errorMessage = error.hint;
-      } 
-      // Then try message
-      else if (error.message) {
-        const msg = String(error.message);
-        // If message looks like JSON, try to parse it
-        const trimmedMsg = msg.trim();
-        if (trimmedMsg.startsWith('{') || trimmedMsg.startsWith('[')) {
-          try {
-            const parsed = JSON.parse(msg);
-            errorMessage = parsed.message || parsed.details || parsed.hint || msg;
-          } catch (e) {
-            // If parsing fails, use the message as-is but truncate if too long
-            errorMessage = msg.length > 200 ? msg.substring(0, 200) + '...' : msg;
-          }
-        } else {
-          errorMessage = msg;
-        }
-      } 
-      // Some errors might be strings
-      else if (typeof error === 'string') {
-        errorMessage = error;
-      }
-      // Last resort: create a safe string representation
-      else {
-        try {
-          // Only stringify if it's a plain object, avoid circular references
-          const errorStr = JSON.stringify(error, Object.getOwnPropertyNames(error));
-          errorMessage = errorStr.length > 200 ? errorStr.substring(0, 200) + '...' : errorStr;
-        } catch (e) {
-          errorMessage = String(error);
-        }
-      }
-    }
-    
-    return errorResponse(res, errorMessage);
+    console.error('Get products error:', error);
+    const { message, status } = productWriteError(error, 'Could not load products.');
+    return errorResponse(res, message, status);
   }
 };
 
@@ -245,7 +211,11 @@ export const getProductBySlug = async (req: Request, res: Response) => {
     return successResponse(res, data);
   } catch (error: any) {
     console.error('Get product error:', error);
-    return errorResponse(res, error.message);
+    if (error?.code === 'PGRST116') {
+      return errorResponse(res, 'Product not found', 404);
+    }
+    const { message, status } = productWriteError(error, 'Could not load this product.');
+    return errorResponse(res, message, status);
   }
 };
 
@@ -331,14 +301,8 @@ export const getFeaturedProducts = async (req: Request, res: Response) => {
     return successResponse(res, data || []);
   } catch (error: any) {
     console.error('Get featured products error:', error);
-    // Extract error message properly
-    let errorMessage = 'Failed to fetch featured products';
-    if (error?.message) {
-      errorMessage = typeof error.message === 'string' ? error.message : String(error.message);
-    } else if (typeof error === 'string') {
-      errorMessage = error;
-    }
-    return errorResponse(res, errorMessage);
+    const { message, status } = productWriteError(error, 'Could not load featured products.');
+    return errorResponse(res, message, status);
   }
 };
 
@@ -597,8 +561,8 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
     return successResponse(res, null, 'Product deleted successfully');
   } catch (error: any) {
     console.error('Delete product error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to delete product');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    const { message, status } = productWriteError(error, 'Could not delete this product.');
+    return errorResponse(res, message, status);
   }
 };
 
@@ -614,8 +578,7 @@ export const getAllCategories = async (req: Request, res: Response) => {
     return successResponse(res, data || []);
   } catch (error: any) {
     console.error('Get categories error:', error);
-    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Failed to fetch categories');
-    return errorResponse(res, typeof errorMessage === 'string' ? errorMessage : String(errorMessage));
+    return errorResponse(res, 'Could not load categories.');
   }
 };
 

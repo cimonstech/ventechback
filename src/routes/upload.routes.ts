@@ -167,13 +167,14 @@ router.get('/list', requireAnyPermission(['products', 'content'], 'view'), async
     if (result.success) {
       return res.status(200).json({
         success: true,
+        data: result.files,
         files: result.files,
         count: result.files?.length || 0,
       });
     } else {
       return res.status(500).json({
         success: false,
-        error: result.error,
+        message: 'Could not list files.',
       });
     }
   } catch (error) {
