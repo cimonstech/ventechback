@@ -24,7 +24,7 @@ import {
   requirePermission,
   staffHasModuleAccess,
 } from '../middleware/auth.middleware';
-import { errorResponse } from '../utils/responseHandlers';
+import { errorResponse, forbiddenResponse, unauthorizedResponse } from '../utils/responseHandlers';
 
 const router = Router();
 const view = requirePermission('affiliates', 'view');
@@ -33,13 +33,13 @@ const edit = requirePermission('affiliates', 'edit');
 const money = [
   authenticate,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return errorResponse(res, 'Unauthorized', 401);
+    if (!req.user) return unauthorizedResponse(res);
     if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
-    if (req.user.role !== 'staff') return errorResponse(res, 'Forbidden - Permission required', 403);
+    if (req.user.role !== 'staff') return forbiddenResponse(res);
     try {
       const affiliates = await staffHasModuleAccess(req, 'affiliates', 'edit');
       const financeEdit = await staffHasModuleAccess(req, 'finance', 'edit');
-      if (!affiliates || !financeEdit) return errorResponse(res, 'Forbidden - Permission required', 403);
+      if (!affiliates || !financeEdit) return forbiddenResponse(res);
       return next();
     } catch (error) {
       console.error('Permission check error:', error);
@@ -55,7 +55,7 @@ const withdrawalStatusPerms = [
     if (req.user?.role === 'admin' || req.user?.role === 'superadmin') return next();
     try {
       const allowed = await staffHasModuleAccess(req, 'finance', 'edit');
-      if (!allowed) return errorResponse(res, 'Forbidden - Permission required', 403);
+      if (!allowed) return forbiddenResponse(res);
       return next();
     } catch (error) {
       console.error('Permission check error:', error);

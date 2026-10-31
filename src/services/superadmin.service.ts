@@ -7,6 +7,7 @@ import {
 
 export {
   TEAM_ACTOR_NAME,
+  applyHiddenSuperadminAuditFilter,
   auditRowVisibleToViewer,
   isHiddenSuperadmin,
   isSuperadmin,
@@ -84,22 +85,6 @@ export async function maskStaffUserIds<T extends Record<string, unknown>>(
     }
     return next;
   });
-}
-
-type FilterableQuery = {
-  or: (filters: string) => FilterableQuery;
-};
-
-export function applyHiddenSuperadminAuditFilter<T extends FilterableQuery>(query: T, superadminIds: string[]): T {
-  let next: FilterableQuery = query.or('actor_role.is.null,actor_role.neq.superadmin');
-  next = next.or('before.is.null,before->>role.is.null,before->>role.neq.superadmin');
-  next = next.or('after.is.null,after->>role.is.null,after->>role.neq.superadmin');
-  if (superadminIds.length > 0) {
-    const list = `(${superadminIds.join(',')})`;
-    next = next.or(`actor_id.is.null,actor_id.not.in.${list}`);
-    next = next.or(`entity_id.is.null,entity_id.not.in.${list}`);
-  }
-  return next as T;
 }
 
 export async function loadOrderTimeline(

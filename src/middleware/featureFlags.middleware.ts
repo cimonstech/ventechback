@@ -6,6 +6,8 @@ import {
 } from '../services/featureFlags.service';
 import { errorResponse } from '../utils/responseHandlers';
 
+export const FEATURE_OFF_CODE = 'feature_off';
+
 export async function requireAffiliatesEnabled(
   _req: Request,
   res: Response,
@@ -13,7 +15,7 @@ export async function requireAffiliatesEnabled(
 ) {
   try {
     if (!(await isAffiliatesEnabled())) {
-      return errorResponse(res, FEATURE_UNAVAILABLE, 403);
+      return errorResponse(res, FEATURE_UNAVAILABLE, 403, null, FEATURE_OFF_CODE);
     }
     return next();
   } catch (error) {
@@ -29,7 +31,7 @@ export async function requireVlbV3Enabled(
 ) {
   try {
     if (!(await isVlbV3Enabled())) {
-      return errorResponse(res, FEATURE_UNAVAILABLE, 403);
+      return errorResponse(res, FEATURE_UNAVAILABLE, 403, null, FEATURE_OFF_CODE);
     }
     return next();
   } catch (error) {

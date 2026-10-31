@@ -1,3 +1,5 @@
+import { formatPesewas } from '../utils/money';
+
 export type SkipReason =
   | 'below_minimum'
   | 'category_not_eligible'
@@ -142,11 +144,7 @@ export function formatPercentFromBp(percentBp: number): string {
 }
 
 export function pesewasCopy(pesewas: number): string {
-  const amount = Number(pesewas);
-  if (!Number.isFinite(amount)) return 'GH₵ 0';
-  const cedis = amount / 100;
-  if (Number.isInteger(cedis)) return `GH₵ ${cedis.toLocaleString('en-US')}`;
-  return `GH₵ ${cedis.toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 export function commissionCopy(input: {

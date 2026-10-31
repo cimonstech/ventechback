@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
 import { errorResponse, successResponse } from '../utils/responseHandlers';
+import { formatCedis } from '../utils/money';
 import {
   PricingError,
   isValidPaymentReference,
@@ -1484,7 +1485,7 @@ export class OrderController {
           .insert([{
             type: 'order',
             title: `New Order: ${orderData.order_number}`,
-            message: `New order received from ${userData?.full_name || shippingAddress?.full_name || 'Guest Customer'}. Total: GHS ${orderData.total.toFixed(2)}`,
+            message: `New order received from ${userData?.full_name || shippingAddress?.full_name || 'Guest Customer'}. Total: ${formatCedis(orderData.total)}`,
             action_url: `/admin/orders/${orderData.id}`,
             is_read: false,
           }]);

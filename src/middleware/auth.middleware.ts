@@ -1,6 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
-import { errorResponse } from '../utils/responseHandlers';
+import {
+  errorResponse,
+  forbiddenResponse,
+  notFoundResponse,
+  unauthorizedResponse,
+} from '../utils/responseHandlers';
+import { allowsVlbMoneyAction } from './vlbMoney.permission';
 
 export type PermissionModule =
   | 'orders'
@@ -48,7 +54,7 @@ export const authenticate = async (
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return errorResponse(res, 'Unauthorized - No token provided', 401);
+      return unauthorizedResponse(res);
     }
 
     const token = authHeader.substring(7);
@@ -60,7 +66,7 @@ export const authenticate = async (
     } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
-      return errorResponse(res, 'Unauthorized - Invalid token', 401);
+      return unauthorizedResponse(res);
     }
 
     // Get user profile
@@ -84,11 +90,11 @@ export const authenticate = async (
 
 export const isAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) {
-    return errorResponse(res, 'Unauthorized', 401);
+    return unauthorizedResponse(res);
   }
 
   if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
-    return errorResponse(res, 'Forbidden - Admin access required', 403);
+    return forbiddenResponse(res);
   }
 
   next();
@@ -98,11 +104,11 @@ export const requireAdmin = [authenticate, isAdmin];
 
 const isSuperadmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) {
-    return errorResponse(res, 'Unauthorized', 401);
+    return unauthorizedResponse(res);
   }
 
   if (req.user.role !== 'superadmin') {
-    return errorResponse(res, 'Forbidden - Superadmin access required', 403);
+    return notFoundResponse(res);
   }
 
   next();
@@ -112,11 +118,11 @@ export const requireSuperadmin = [authenticate, isSuperadmin];
 
 const isStaff = (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) {
-    return errorResponse(res, 'Unauthorized', 401);
+    return unauthorizedResponse(res);
   }
 
   if (!['staff', 'admin', 'superadmin'].includes(req.user.role)) {
-    return errorResponse(res, 'Forbidden - Staff access required', 403);
+    return forbiddenResponse(res);
   }
 
   next();
@@ -151,6 +157,10 @@ export async function staffHasModuleAccess(
   module: PermissionModule,
   level: PermissionLevel
 ): Promise<boolean> {
+  if (req.user?.role === 'superadmin') {
+    return true;
+  }
+
   if (req.user?.role !== 'staff') {
     return false;
   }
@@ -160,10 +170,32 @@ export async function staffHasModuleAccess(
   return allowsLevel(row, level);
 }
 
+export async function canActOnVlbMoney(req: AuthRequest): Promise<boolean> {
+  if (!req.user) return false;
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') return true;
+  if (req.user.role !== 'staff') return false;
+  const permissions = await loadStaffPermissions(req);
+  return allowsVlbMoneyAction(req.user.role, permissions);
+}
+
+export const requireVlbMoney = [
+  authenticate,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return unauthorizedResponse(res);
+    try {
+      if (!(await canActOnVlbMoney(req))) return forbiddenResponse(res);
+      return next();
+    } catch (error) {
+      console.error('Permission check error:', error);
+      return errorResponse(res, 'Failed to check permissions', 500);
+    }
+  },
+];
+
 export const requirePermission = (module: PermissionModule, level: PermissionLevel) => {
   const checkPermission = async (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return errorResponse(res, 'Unauthorized', 401);
+      return unauthorizedResponse(res);
     }
 
     if (req.user.role === 'admin' || req.user.role === 'superadmin') {
@@ -171,14 +203,14 @@ export const requirePermission = (module: PermissionModule, level: PermissionLev
     }
 
     if (req.user.role !== 'staff') {
-      return errorResponse(res, 'Forbidden - Permission required', 403);
+      return forbiddenResponse(res);
     }
 
     try {
       const allowed = await staffHasModuleAccess(req, module, level);
 
       if (!allowed) {
-        return errorResponse(res, 'Forbidden - Permission required', 403);
+        return forbiddenResponse(res);
       }
 
       return next();
@@ -194,7 +226,7 @@ export const requirePermission = (module: PermissionModule, level: PermissionLev
 export const requireAnyPermission = (modules: PermissionModule[], level: PermissionLevel) => {
   const checkAnyPermission = async (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return errorResponse(res, 'Unauthorized', 401);
+      return unauthorizedResponse(res);
     }
 
     if (req.user.role === 'admin' || req.user.role === 'superadmin') {
@@ -202,7 +234,7 @@ export const requireAnyPermission = (modules: PermissionModule[], level: Permiss
     }
 
     if (req.user.role !== 'staff') {
-      return errorResponse(res, 'Forbidden - Permission required', 403);
+      return forbiddenResponse(res);
     }
 
     try {
@@ -213,7 +245,7 @@ export const requireAnyPermission = (modules: PermissionModule[], level: Permiss
       });
 
       if (!allowed) {
-        return errorResponse(res, 'Forbidden - Permission required', 403);
+        return forbiddenResponse(res);
       }
 
       return next();
@@ -251,14 +283,14 @@ async function loadProgramRoles(req: AuthRequest): Promise<ProgramRole[]> {
 export const requireProgramRole = (role: ProgramRole) => {
   const checkProgramRole = async (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return errorResponse(res, 'Unauthorized', 401);
+      return unauthorizedResponse(res);
     }
 
     try {
       const roles = await loadProgramRoles(req);
 
       if (!roles.includes(role)) {
-        return errorResponse(res, 'Forbidden - Program role required', 403);
+        return forbiddenResponse(res);
       }
 
       return next();

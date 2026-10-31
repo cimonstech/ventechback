@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -224,7 +225,7 @@ function escapeHtml(value: string): string {
 }
 
 function pesewasLabel(pesewas: number): string {
-  return `GH₵ ${(pesewas / 100).toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 async function emailAffiliatePending(affiliateId: string, amountPesewas: number) {

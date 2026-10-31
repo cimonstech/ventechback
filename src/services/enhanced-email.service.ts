@@ -4,6 +4,7 @@ import path from 'path';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { settingsService } from './settings.service';
 import { adminNotificationEmail, emailSubject } from '../config/email';
+import { formatCedis } from '../utils/money';
 
 interface EmailOptions {
   to: string;
@@ -260,7 +261,7 @@ class EnhancedEmailService {
         .replace(/{{CUSTOMER_EMAIL}}/g, orderData.customer_email || 'N/A')
         .replace(/{{ORDER_PREPARATION_MESSAGE}}/g, preparationMessage)
         .replace(/{{ORDER_DATE}}/g, orderData.created_at ? new Date(orderData.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A')
-        .replace(/{{TOTAL_AMOUNT}}/g, `GHS ${total.toFixed(2)}`)
+        .replace(/{{TOTAL_AMOUNT}}/g, formatCedis(total))
         .replace(/{{SUBTOTAL}}/g, subtotal.toFixed(2))
         .replace(/{{SHIPPING_LABEL}}/g, shippingLabel)
         .replace(/{{SHIPPING}}/g, shippingFee.toFixed(2))
@@ -384,7 +385,7 @@ class EnhancedEmailService {
         .replace(/{{CUSTOMER_NAME}}/g, orderData.customer_name)
         .replace(/{{NEW_STATUS}}/g, newStatus.charAt(0).toUpperCase() + newStatus.slice(1))
         .replace(/{{ORDER_DATE}}/g, new Date(orderData.created_at).toLocaleDateString())
-        .replace(/{{TOTAL_AMOUNT}}/g, `GHS ${orderData.total.toFixed(2)}`)
+        .replace(/{{TOTAL_AMOUNT}}/g, formatCedis(orderData.total))
         .replace(/{{ORDER_TYPE_BADGE}}/g, orderTypeBadge);
 
       // Add pre-order specific information if applicable
@@ -569,10 +570,10 @@ class EnhancedEmailService {
           <div style="font-weight: bold; color: #1A1A1A;">${item.quantity || 0}</div>
         </td>
         <td style="padding: 15px; border-bottom: 1px solid #eee; text-align: right; vertical-align: top;">
-          <div style="color: #3A3A3A;">GHS ${unitPrice.toFixed(2)}</div>
+          <div style="color: #3A3A3A;">${formatCedis(unitPrice)}</div>
         </td>
         <td style="padding: 15px; border-bottom: 1px solid #eee; text-align: right; vertical-align: top;">
-          <div style="font-weight: bold; color: #FF7A19;">GHS ${subtotal.toFixed(2)}</div>
+          <div style="font-weight: bold; color: #FF7A19;">${formatCedis(subtotal)}</div>
         </td>
       </tr>`;
     }).join('');
@@ -803,7 +804,7 @@ class EnhancedEmailService {
       <div style="padding: 15px; border-bottom: 1px solid #eee;">
         <h4 style="margin: 0 0 10px 0; color: #FF7A19;">${item.product_name || 'Unknown Product'}</h4>
         <p style="margin: 0; color: #666;">${item.product_description || ''}</p>
-        <p style="margin: 5px 0 0 0; font-weight: bold; color: #333;">GHS ${(item.product_price || 0).toFixed(2)}</p>
+        <p style="margin: 5px 0 0 0; font-weight: bold; color: #333;">${formatCedis(item.product_price || 0)}</p>
       </div>
     `).join('');
   }
@@ -816,8 +817,8 @@ class EnhancedEmailService {
       <tr>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.product_name || 'Unknown Product'}</td>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.quantity || 1}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${(item.price || 0).toFixed(2)}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${((item.price || 0) * (item.quantity || 1)).toFixed(2)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${formatCedis(item.price || 0)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${formatCedis((item.price || 0) * (item.quantity || 1))}</td>
       </tr>
     `).join('');
   }
@@ -844,7 +845,7 @@ class EnhancedEmailService {
               <p><strong>Email:</strong> ${email}</p>
               <p><strong>Phone:</strong> ${phone}</p>
               <p><strong>Tier:</strong> ${tier}</p>
-              <p><strong>Amount:</strong> GHS ${amount}</p>
+              <p><strong>Amount:</strong> ${typeof amount === 'number' ? formatCedis(amount) : formatCedis(Number(amount) || 0)}</p>
               <p><strong>Plan:</strong> ${plan}</p>
               ${message ? `<p><strong>Message:</strong> ${message}</p>` : ''}
             </div>

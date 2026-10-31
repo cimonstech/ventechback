@@ -28,21 +28,24 @@ import {
   adminPreviewSchedule,
   adminRecordStars,
   adminReferralBonus,
+  adminRemoveApplicationFile,
   adminRenewInvestment,
   adminScholarFundReport,
+  adminSendAgreementLink,
   adminSettlementQueue,
   adminSettleInvestment,
   adminUpdatePlan,
   adminUploadAgreementTemplate,
+  adminUploadApplicationFiles,
   adminUploadDocument,
   adminUploadPublicDoc,
+  adminGetApplicationFile,
 } from '../controllers/adminVlb.controller';
 import {
-  authenticate,
   AuthRequest,
   requirePermission,
   requireSuperadmin,
-  staffHasModuleAccess,
+  requireVlbMoney,
 } from '../middleware/auth.middleware';
 import { requireVlbV3Enabled } from '../middleware/featureFlags.middleware';
 import { uploadRateLimiter } from '../middleware/rateLimit.middleware';
@@ -52,28 +55,16 @@ const router = Router();
 const view = requirePermission('vlb', 'view');
 const edit = requirePermission('vlb', 'edit');
 const financeEdit = requirePermission('finance', 'edit');
-
-const money = [
-  authenticate,
-  async (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return errorResponse(res, 'Unauthorized', 401);
-    if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
-    if (req.user.role !== 'staff') return errorResponse(res, 'Forbidden - Permission required', 403);
-    try {
-      const vlb = await staffHasModuleAccess(req, 'vlb', 'edit');
-      const finance = await staffHasModuleAccess(req, 'finance', 'edit');
-      if (!vlb || !finance) return errorResponse(res, 'Forbidden - Permission required', 403);
-      return next();
-    } catch (error) {
-      console.error('Permission check error:', error);
-      return errorResponse(res, 'Failed to check permissions', 500);
-    }
-  },
-];
+const money = requireVlbMoney;
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+});
+
+const agreementUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
 });
 
 function acceptDocument(req: AuthRequest, res: Response, next: NextFunction) {
@@ -86,6 +77,16 @@ function acceptDocument(req: AuthRequest, res: Response, next: NextFunction) {
   });
 }
 
+function acceptAgreementFiles(req: AuthRequest, res: Response, next: NextFunction) {
+  agreementUpload.array('files', 10)(req, res, (err: unknown) => {
+    if (!err) return next();
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
+    if (code === 'LIMIT_FILE_SIZE') return errorResponse(res, 'Each file must be 10 MB or smaller.', 400);
+    if (code === 'LIMIT_FILE_COUNT') return errorResponse(res, 'Upload up to 10 photos.', 400);
+    return errorResponse(res, 'Could not upload this file', 400);
+  });
+}
+
 router.get('/plans', view, adminListPlans);
 router.post('/plans', edit, adminCreatePlan);
 router.put('/plans/:id', edit, adminUpdatePlan);
@@ -94,6 +95,10 @@ router.get('/applications', view, adminListApplications);
 router.get('/applications/:id', view, adminGetApplication);
 router.patch('/applications/:id', edit, adminPatchApplication);
 router.post('/applications/:id/activate', money, requireVlbV3Enabled, adminActivateApplication);
+router.post('/applications/:id/files', edit, uploadRateLimiter, acceptAgreementFiles, adminUploadApplicationFiles);
+router.get('/applications/:id/files/:fileId', view, adminGetApplicationFile);
+router.delete('/applications/:id/files/:fileId', edit, adminRemoveApplicationFile);
+router.post('/applications/:id/send-upload-link', edit, uploadRateLimiter, adminSendAgreementLink);
 
 router.get('/investors', view, adminListInvestors);
 router.get('/investors/:id', view, adminGetInvestor);

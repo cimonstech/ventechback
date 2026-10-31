@@ -9,6 +9,7 @@ import {
   termProgress,
   todayAccra,
 } from '../services/vlbCalc.service';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { claimJobRun, finishJobRun } from './lock';
 
@@ -55,7 +56,7 @@ function errorText(error: unknown): string {
 }
 
 function ghs(pesewas: number): string {
-  return `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 function escapeHtml(value: string): string {

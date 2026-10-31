@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -541,7 +542,7 @@ export async function updateWithdrawalStatus(
           subject: `Withdrawal ${input.to}`,
           html: `
             <p>Hi ${escapeHtml(userName(user))},</p>
-            <p>Your withdrawal of GH₵ ${(updated.amount_pesewas / 100).toFixed(2)} is now ${escapeHtml(input.to)}.</p>
+            <p>Your withdrawal of ${formatPesewas(updated.amount_pesewas)} is now ${escapeHtml(input.to)}.</p>
             ${input.reason ? `<p>${escapeHtml(input.reason)}</p>` : ''}
             <p>VENTECH Gadgets</p>
           `,

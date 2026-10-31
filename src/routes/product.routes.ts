@@ -15,7 +15,7 @@ import {
   requirePermission,
   staffHasModuleAccess,
 } from '../middleware/auth.middleware';
-import { errorResponse } from '../utils/responseHandlers';
+import { errorResponse, forbiddenResponse, unauthorizedResponse } from '../utils/responseHandlers';
 import { 
   publicRateLimiter, 
   productDetailsRateLimiter,
@@ -41,7 +41,7 @@ router.get('/:slug', productDetailsRateLimiter, getProductBySlug);
 
 const requireProductUpdateAccess = async (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) {
-    return errorResponse(res, 'Unauthorized', 401);
+    return unauthorizedResponse(res);
   }
 
   if (req.user.role === 'admin' || req.user.role === 'superadmin') {
@@ -49,7 +49,7 @@ const requireProductUpdateAccess = async (req: AuthRequest, res: Response, next:
   }
 
   if (req.user.role !== 'staff') {
-    return errorResponse(res, 'Forbidden - Permission required', 403);
+    return forbiddenResponse(res);
   }
 
   try {
@@ -61,7 +61,7 @@ const requireProductUpdateAccess = async (req: AuthRequest, res: Response, next:
       return next();
     }
 
-    return errorResponse(res, 'Forbidden - Permission required', 403);
+    return forbiddenResponse(res);
   } catch (error) {
     console.error('Permission check error:', error);
     return errorResponse(res, 'Failed to check permissions', 500);

@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
 import { adminNotificationEmail, emailSubject } from '../config/email';
+import { formatCedis } from '../utils/money';
 
 interface EmailOptions {
   to: string;
@@ -110,7 +111,7 @@ class EmailService {
       .replace('{{ORDER_NUMBER}}', orderData.order_number)
       .replace('{{CUSTOMER_NAME}}', orderData.customer_name)
       .replace('{{ORDER_DATE}}', new Date(orderData.created_at).toLocaleDateString())
-      .replace('{{TOTAL_AMOUNT}}', `GHS ${orderData.total.toFixed(2)}`)
+      .replace('{{TOTAL_AMOUNT}}', formatCedis(orderData.total))
       .replace('{{DELIVERY_ADDRESS}}', this.formatAddress(orderData.delivery_address))
       .replace('{{ITEMS_LIST}}', this.formatOrderItems(orderData.items));
 
@@ -288,7 +289,7 @@ class EmailService {
               <p><strong>Email:</strong> ${email}</p>
               <p><strong>Phone:</strong> ${phone}</p>
               <p><strong>Tier:</strong> ${tier}</p>
-              <p><strong>Amount:</strong> GHS ${amount}</p>
+              <p><strong>Amount:</strong> ${typeof amount === 'number' ? formatCedis(amount) : formatCedis(Number(amount) || 0)}</p>
               <p><strong>Plan:</strong> ${plan}</p>
               ${message ? `<p><strong>Message:</strong> ${message}</p>` : ''}
             </div>
@@ -553,8 +554,8 @@ This bulk order request was submitted through the VENTECH website.
         </td>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.product_name}</td>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.quantity}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${item.unit_price.toFixed(2)}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">GHS ${item.subtotal.toFixed(2)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${formatCedis(item.unit_price)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${formatCedis(item.subtotal)}</td>
       </tr>
     `).join('');
   }
@@ -565,7 +566,7 @@ This bulk order request was submitted through the VENTECH website.
         <img src="${item.product.image_url}" alt="${item.product.name}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; margin-right: 15px;">
         <div>
           <h4 style="margin: 0 0 5px 0; color: #1A1A1A;">${item.product.name}</h4>
-          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${item.product.original_price.toFixed(2)}</p>
+          <p style="margin: 0; color: #FF7A19; font-weight: bold;">${formatCedis(item.product.original_price)}</p>
         </div>
       </div>
     `).join('');
@@ -577,7 +578,7 @@ This bulk order request was submitted through the VENTECH website.
         <img src="${item.image_url}" alt="${item.name}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; margin-right: 15px;">
         <div>
           <h4 style="margin: 0 0 5px 0; color: #1A1A1A;">${item.name}</h4>
-          <p style="margin: 0; color: #FF7A19; font-weight: bold;">GHS ${(item.discount_price || item.original_price).toFixed(2)}</p>
+          <p style="margin: 0; color: #FF7A19; font-weight: bold;">${formatCedis(item.discount_price || item.original_price)}</p>
         </div>
       </div>
     `).join('');

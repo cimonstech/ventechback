@@ -11,7 +11,8 @@ import { affiliateSettings } from './affiliateSettings.service';
 export class AffiliateError extends Error {
   constructor(
     public statusCode: number,
-    message: string
+    message: string,
+    public code = 'affiliate_error'
   ) {
     super(message);
     this.name = 'AffiliateError';

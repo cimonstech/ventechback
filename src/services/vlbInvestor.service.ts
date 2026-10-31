@@ -609,6 +609,7 @@ export async function publicDocsLinks() {
   const result: {
     guide?: { title: string; url: string };
     agreement_template?: { title: string; url: string };
+    agreement?: { title: string; url: string };
   } = {};
   if (guide) {
     const presented = await presentDocumentRow(guide);
@@ -616,7 +617,10 @@ export async function publicDocsLinks() {
   }
   if (agreement) {
     const presented = await presentDocumentRow(agreement);
-    if (presented.url) result.agreement_template = { title: presented.title, url: presented.url };
+    if (presented.url) {
+      result.agreement_template = { title: presented.title, url: presented.url };
+      result.agreement = result.agreement_template;
+    }
   }
   return result;
 }

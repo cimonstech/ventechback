@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 let client: S3Client | null = null;
@@ -46,6 +46,26 @@ export async function getSignedViewUrl(key: string, seconds = SIGNED_VIEW_SECOND
     new GetObjectCommand({ Bucket: bucket(), Key: key }),
     { expiresIn: seconds }
   );
+}
+
+export async function getPrivateObject(key: string): Promise<Buffer> {
+  const result = await storageClient().send(new GetObjectCommand({
+    Bucket: bucket(),
+    Key: key,
+  }));
+  const bytes = await result.Body?.transformToByteArray();
+  if (!bytes?.length) throw new Error('Empty object');
+  return Buffer.from(bytes);
+}
+
+export async function copyPrivateObject(fromKey: string, toKey: string, mime: string): Promise<void> {
+  await storageClient().send(new CopyObjectCommand({
+    Bucket: bucket(),
+    CopySource: `${bucket()}/${fromKey}`,
+    Key: toKey,
+    ContentType: mime,
+    MetadataDirective: 'REPLACE',
+  }));
 }
 
 export async function deletePrivateObject(key: string): Promise<void> {

@@ -1,5 +1,9 @@
 import { Response } from 'express';
 
+export const AUTH_SIGN_IN = 'Please sign in again.';
+export const AUTH_NO_ACCESS = "You don't have access to this page.";
+export const AUTH_NOT_FOUND = 'Not found';
+
 export const successResponse = (
   res: Response,
   data: any,
@@ -17,14 +21,26 @@ export const errorResponse = (
   res: Response,
   message: string = 'An error occurred',
   statusCode: number = 500,
-  errors: any = null
+  errors: any = null,
+  code?: string
 ) => {
-  return res.status(statusCode).json({
+  const body: Record<string, unknown> = {
     success: false,
     message,
     errors,
-  });
+  };
+  if (code) body.code = code;
+  return res.status(statusCode).json(body);
 };
+
+export const unauthorizedResponse = (res: Response) =>
+  errorResponse(res, AUTH_SIGN_IN, 401, null, 'unauthorized');
+
+export const forbiddenResponse = (res: Response) =>
+  errorResponse(res, AUTH_NO_ACCESS, 403, null, 'forbidden');
+
+export const notFoundResponse = (res: Response, message = AUTH_NOT_FOUND) =>
+  errorResponse(res, message, 404, null, 'not_found');
 
 export const paginatedResponse = (
   res: Response,
@@ -46,6 +62,3 @@ export const paginatedResponse = (
     ...extra,
   });
 };
-
-
-

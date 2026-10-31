@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { formatCedis, formatPesewas } from '../utils/money';
 import { drawFooter, drawHeader, drawHeaderFallback, PDF_BRAND } from './pdfBrand';
 
 interface OrderData {
@@ -50,7 +51,7 @@ interface OrderData {
 }
 
 function ghsPesewas(pesewas: number): string {
-  return `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 function monthLabel(date: string): string {
@@ -229,7 +230,7 @@ class PDFService {
       doc.fontSize(11).fillColor(PDF_BRAND.body);
       const lines = [
         ['Laptop', input.laptop_model],
-        ['Amount', `GHS ${Number(input.amount).toFixed(2)}`],
+        ['Amount', formatCedis(Number(input.amount))],
         ['Method', input.method],
         ['Reference', input.reference || '—'],
         ['Date', new Date(input.paid_at).toLocaleString('en-GB')],
@@ -623,9 +624,9 @@ class PDFService {
       doc.fontSize(9) // Reduced from 10
          .fillColor('#1A1A1A')
          .text((item.quantity || 0).toString(), 335, currentY, { width: 40, align: 'center' })
-         .text(`GHS ${(item.unit_price || 0).toFixed(2)}`, 385, currentY, { width: 70, align: 'right' })
+         .text(formatCedis(item.unit_price || 0), 385, currentY, { width: 70, align: 'right' })
          .font('Helvetica-Bold')
-         .text(`GHS ${itemTotal.toFixed(2)}`, 475, currentY, { width: 70, align: 'right' })
+         .text(formatCedis(itemTotal), 475, currentY, { width: 70, align: 'right' })
          .font('Helvetica');
       
       currentY += 22; // Reduced from 28
@@ -656,20 +657,20 @@ class PDFService {
     // Calculate required height based on number of summary items
     const summaryItems: Array<[string, string]> = [];
     
-    summaryItems.push(['Subtotal:', `GHS ${orderData.subtotal.toFixed(2)}`]);
+    summaryItems.push(['Subtotal:', formatCedis(orderData.subtotal)]);
     
     if (orderData.discount > 0) {
-      summaryItems.push(['Discount:', `-GHS ${orderData.discount.toFixed(2)}`]);
+      summaryItems.push(['Discount:', `-${formatCedis(orderData.discount)}`]);
     }
     
     if (orderData.tax > 0) {
-      summaryItems.push(['Tax:', `GHS ${orderData.tax.toFixed(2)}`]);
+      summaryItems.push(['Tax:', formatCedis(orderData.tax)]);
     }
     
     const shippingFee = orderData.shipping_fee || orderData.delivery_fee || 0;
     if (shippingFee > 0) {
       const shippingLabel = orderData.is_pre_order ? 'Shipment:' : 'Delivery:';
-      summaryItems.push([shippingLabel, `GHS ${shippingFee.toFixed(2)}`]);
+      summaryItems.push([shippingLabel, formatCedis(shippingFee)]);
     }
 
     // Calculate box height: padding (15 top + 15 bottom) + items (16 each) + divider (3) + total (26) + spacing (10)
@@ -708,7 +709,7 @@ class PDFService {
        .fillColor('#FFFFFF')
        .font('Helvetica-Bold')
        .text('TOTAL:', summaryX + 20, totalY + 6) // Adjusted vertical position
-       .text(`GHS ${orderData.total.toFixed(2)}`, summaryX + 20, totalY + 6, { width: summaryWidth - 40, align: 'right' })
+       .text(formatCedis(orderData.total), summaryX + 20, totalY + 6, { width: summaryWidth - 40, align: 'right' })
        .font('Helvetica');
     
     // Return the Y position after the summary box

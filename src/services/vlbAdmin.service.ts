@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
 import { deletePrivateObject, getSignedViewUrl, putPrivateObject } from './privateStorage.service';
 import { detectTicketFile } from './ticketFiles';
-import { loadPlan, VlbError } from './vlb.service';
+import { loadPlan, renewOnRepeat, settleOnRepeat, VlbError } from './vlb.service';
 import {
   InvestmentRow,
   InvestorRow,
@@ -70,7 +71,7 @@ function dateOnly(value: unknown): string {
 }
 
 function pesewasLabel(pesewas: number): string {
-  return `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 function rpcMessage(error: unknown): string {
@@ -153,24 +154,46 @@ async function loadInvestment(id: string): Promise<InvestmentRow> {
   return data as InvestmentRow;
 }
 
-export async function listApplications(input: { page: number; limit: number; status?: string }) {
+export async function listApplications(input: {
+  page: number;
+  limit: number;
+  status?: string;
+  agreement?: string;
+}) {
   if (input.status && !APP_STATUSES.includes(input.status as (typeof APP_STATUSES)[number])) {
     throw new VlbError(400, 'That status is not available.');
   }
+  if (input.agreement && !['uploaded', 'missing'].includes(input.agreement)) {
+    throw new VlbError(400, 'That agreement filter is not available.');
+  }
   const from = (input.page - 1) * input.limit;
   const to = from + input.limit - 1;
+  const { applicationIdsWithSignedAgreement } = await import('./vlbApplicationFiles.service');
+  const withFiles = await applicationIdsWithSignedAgreement();
   let query = supabaseAdmin
     .from('vlb_applications')
     .select('*, vlb_plans(name, plan_group, tier, version)', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(from, to);
+    .order('created_at', { ascending: false });
   if (input.status) query = query.eq('status', input.status);
-  const { data, error, count } = await query;
+  if (input.agreement === 'uploaded') {
+    const ids = [...withFiles];
+    if (ids.length === 0) return { rows: [], total: 0 };
+    query = query.in('id', ids);
+  } else if (input.agreement === 'missing' && withFiles.size > 0) {
+    query = query.not('id', 'in', `(${[...withFiles].join(',')})`);
+  }
+  const { data, error, count } = await query.range(from, to);
   if (error) {
     logDb('list applications', error);
     throw new VlbError(500, 'Could not load applications.');
   }
-  return { rows: data || [], total: count || 0 };
+  return {
+    rows: (data || []).map((row) => ({
+      ...row,
+      agreement_uploaded: withFiles.has(row.id),
+    })),
+    total: count || 0,
+  };
 }
 
 export async function getApplication(id: string) {
@@ -184,7 +207,27 @@ export async function getApplication(id: string) {
     throw new VlbError(500, 'Could not load this application.');
   }
   if (!data) throw new VlbError(404, 'Application not found.');
-  return data;
+  const {
+    presentAdminAgreementFiles,
+    agreementStatusLine,
+  } = await import('./vlbApplicationFiles.service');
+  const files = await presentAdminAgreementFiles(id);
+  const uploaderIds = [...new Set(files.map((file) => file.uploaded_by).filter(Boolean))] as string[];
+  const names = new Map<string, string>();
+  for (const userId of uploaderIds) {
+    const user = await loadUser(userId);
+    names.set(userId, displayName(user));
+  }
+  const withNames = files.map((file) => ({
+    ...file,
+    uploader_name: file.uploaded_by ? names.get(file.uploaded_by) || null : null,
+  }));
+  return {
+    ...data,
+    agreement_uploaded: withNames.length > 0,
+    agreement_status: agreementStatusLine(withNames),
+    agreement_files: withNames,
+  };
 }
 
 export async function patchApplication(
@@ -624,7 +667,9 @@ export async function listSettlementQueue() {
 
 export async function settleInvestment(req: AuditReq, investmentId: string) {
   const investment = await loadInvestment(investmentId);
-  if (investment.status !== 'settlement') {
+  const repeat = settleOnRepeat(investment.status);
+  if (repeat === 'return_existing') return investment;
+  if (repeat === 'invalid') {
     throw new VlbError(400, 'This investment is not in settlement.');
   }
   if (investment.renewal_choice !== 'settle') {
@@ -680,7 +725,18 @@ async function loadCurrentPlanVersion(planGroup: string, tier: string) {
 
 export async function renewInvestment(req: AuditReq, investmentId: string) {
   const old = await loadInvestment(investmentId);
-  if (old.status !== 'settlement') {
+  const repeat = renewOnRepeat(old.status);
+  if (repeat === 'return_existing') {
+    if (!old.renewed_into_id) throw new VlbError(409, 'This investment is already renewed.');
+    return {
+      old_investment_id: old.id,
+      new_investment_id: old.renewed_into_id,
+      start_date: dateOnly(old.start_date),
+      maturity_date: dateOnly(old.maturity_date),
+      plan_id: old.plan_id,
+    };
+  }
+  if (repeat === 'invalid') {
     throw new VlbError(400, 'This investment is not in settlement.');
   }
   if (old.renewal_choice !== 'renew') {

@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { adminNotificationEmail } from '../config/email';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -417,7 +418,7 @@ function withdrawalRpcMessage(error: unknown): string {
 export async function requestWithdrawal(req: AuditReq, userId: string, amountPesewas: number) {
   const row = await ownAffiliate(userId);
   if (row.status !== 'active') {
-    throw new AffiliateError(403, 'You cannot withdraw right now.');
+    throw new AffiliateError(409, 'You cannot withdraw right now.', 'cannot_withdraw');
   }
   const settings = await affiliateSettings.get();
   const { data, error } = await supabaseAdmin.rpc('request_affiliate_withdrawal', {
@@ -432,7 +433,7 @@ export async function requestWithdrawal(req: AuditReq, userId: string, amountPes
     const message = withdrawalRpcMessage(error);
     logDb('request_affiliate_withdrawal', error);
     if (message.includes('Affiliate not found')) throw new AffiliateError(404, 'Affiliate application not found.');
-    if (message.includes('Affiliate is not active')) throw new AffiliateError(403, 'You cannot withdraw right now.');
+    if (message.includes('Affiliate is not active')) throw new AffiliateError(409, 'You cannot withdraw right now.', 'cannot_withdraw');
     if (message.includes('below the minimum')) throw new AffiliateError(400, 'Amount is below the minimum withdrawal.');
     if (message.includes('Payout details are not set')) throw new AffiliateError(400, 'Payout details are not set.');
     if (message.includes('changed recently')) {
@@ -471,7 +472,7 @@ export async function requestWithdrawal(req: AuditReq, userId: string, amountPes
   });
 
   const user = await loadUser(userId);
-  const amountLabel = `GH₵ ${(amountPesewas / 100).toFixed(2)}`;
+  const amountLabel = formatPesewas(amountPesewas);
   try {
     if (user?.email) {
       await emailService.sendEmail(

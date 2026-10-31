@@ -25,10 +25,20 @@ function formMessage(error: z.ZodError): string {
 
 function fail(res: Response, error: unknown, fallback: string) {
   if (error instanceof VlbError) {
-    return errorResponse(res, error.message, error.statusCode);
+    return errorResponse(res, error.message, error.statusCode, error.errors, error.code);
   }
   console.error(fallback, error);
   return errorResponse(res, fallback, 500);
+}
+
+function uploadedFiles(req: AuthRequest): Array<{ buffer: Buffer; size: number; originalname?: string }> {
+  const files = (req as AuthRequest & { files?: Express.Multer.File[] }).files;
+  if (!Array.isArray(files)) return [];
+  return files.map((file) => ({
+    buffer: file.buffer,
+    size: file.size,
+    originalname: file.originalname,
+  }));
 }
 
 export async function getPublicPlans(_req: AuthRequest, res: Response) {
@@ -49,10 +59,46 @@ export async function postApplication(req: AuthRequest, res: Response) {
     const application = await submitApplication({
       ...parsed.data,
       user_id: req.user?.id || null,
-    });
-    return successResponse(res, { id: application.id }, 'Application received.', 201);
+      files: uploadedFiles(req),
+    }, req);
+    return successResponse(
+      res,
+      {
+        id: application.id,
+        upload_token: application.upload_token,
+        has_signed_agreement: application.has_signed_agreement,
+      },
+      'Application received.',
+      201
+    );
   } catch (error) {
     return fail(res, error, 'Could not save this application.');
+  }
+}
+
+export async function getAgreementUpload(req: AuthRequest, res: Response) {
+  try {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) return errorResponse(res, 'This upload link is not valid.', 404, null, 'not_found');
+    const { getPublicUploadPage } = await import('../services/vlbApplicationFiles.service');
+    const data = await getPublicUploadPage(token);
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not load this upload link.');
+  }
+}
+
+export async function postAgreementUpload(req: AuthRequest, res: Response) {
+  try {
+    const token = typeof req.body?.token === 'string' ? req.body.token : typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) return errorResponse(res, 'This upload link is not valid.', 404, null, 'not_found');
+    const files = uploadedFiles(req);
+    if (files.length === 0) return errorResponse(res, 'Choose a file.', 400, { files: 'Choose a file.' }, 'validation');
+    const { uploadWithToken } = await import('../services/vlbApplicationFiles.service');
+    const data = await uploadWithToken(req, token, files);
+    return successResponse(res, data, data.message);
+  } catch (error) {
+    return fail(res, error, 'Could not store this file.');
   }
 }
 

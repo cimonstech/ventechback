@@ -51,7 +51,7 @@ function formMessage(error: z.ZodError): string {
 
 function fail(res: Response, error: unknown, fallback: string) {
   if (error instanceof AffiliateError) {
-    return errorResponse(res, error.message, error.statusCode);
+    return errorResponse(res, error.message, error.statusCode, null, error.code);
   }
   console.error(fallback, error);
   return errorResponse(res, fallback, 500);

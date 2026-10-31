@@ -205,6 +205,16 @@ export const ticketCreateRateLimiter = rateLimit({
  * Public referral click tracking
  * - 40 requests per minute per IP
  */
+export const agreementUploadRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 20,
+  message: 'Too many upload requests. Please wait before trying again.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: standardHandler,
+  keyGenerator: (req: Request) => `ip:${req.ip || 'unknown'}`,
+});
+
 export const refClickRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: process.env.DISABLE_RATE_LIMIT === 'true' ? 1000000 : 40,

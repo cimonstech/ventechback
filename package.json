@@ -8,7 +8,7 @@
     "dev:clean": "kill-port.bat && nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --require ts-node/register/transpile-only --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts src/services/paystack.status.test.ts"
+    "test": "node --require ts-node/register/transpile-only --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts src/services/paystack.status.test.ts src/services/stagingFixes.test.ts src/middleware/vlbMoney.permission.test.ts src/services/vlbSignedAgreement.test.ts"
   },
   "keywords": [
     "ecommerce",
@@ -27,6 +27,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.4.1",
+    "heic-convert": "^2.1.0",
     "multer": "^2.0.2",
     "node-cron": "4.6.0",
     "pdfkit": "^0.15.2",

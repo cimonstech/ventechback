@@ -101,6 +101,9 @@ const activateSchema = z.object({
   payment_method: z.string().trim().min(1).max(80),
   payment_reference: z.string().trim().min(1).max(120),
   agreement_signed_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  agreement_checked: z.boolean().refine((value) => value === true, {
+    message: 'Confirm you have checked the signed agreement is complete and signed.',
+  }),
   payout: payoutSchema.optional(),
 });
 
@@ -112,7 +115,7 @@ function formMessage(error: z.ZodError): string {
 
 function fail(res: Response, error: unknown, fallback: string) {
   if (error instanceof VlbError) {
-    return errorResponse(res, error.message, error.statusCode);
+    return errorResponse(res, error.message, error.statusCode, error.errors, error.code);
   }
   console.error(fallback, error);
   return errorResponse(res, fallback, 500);
@@ -239,7 +242,12 @@ async function canSeeFinance(req: AuthRequest): Promise<boolean> {
 export async function adminListApplications(req: AuthRequest, res: Response) {
   try {
     const { page, limit } = pageLimit(req);
-    const data = await listApplications({ page, limit, status: queryValue(req.query.status) || undefined });
+    const data = await listApplications({
+      page,
+      limit,
+      status: queryValue(req.query.status) || undefined,
+      agreement: queryValue(req.query.agreement) || undefined,
+    });
     return paginatedResponse(res, data.rows, {
       page,
       limit,
@@ -672,5 +680,73 @@ export async function adminPayoutsReport(req: AuthRequest, res: Response) {
     return successResponse(res, data);
   } catch (error) {
     return fail(res, error, 'Could not load this report.');
+  }
+}
+
+function uploadedFiles(req: AuthRequest): Array<{ buffer: Buffer; size: number; originalname?: string }> {
+  const files = (req as AuthRequest & { files?: Express.Multer.File[] }).files;
+  if (!Array.isArray(files)) return [];
+  return files.map((file) => ({
+    buffer: file.buffer,
+    size: file.size,
+    originalname: file.originalname,
+  }));
+}
+
+export async function adminUploadApplicationFiles(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Application not found.', 404);
+    const files = uploadedFiles(req);
+    if (files.length === 0) return errorResponse(res, 'Choose a file.', 400, { files: 'Choose a file.' }, 'validation');
+    const { adminUploadAgreementFiles } = await import('../services/vlbApplicationFiles.service');
+    const data = await adminUploadAgreementFiles(req, id, files);
+    return successResponse(res, data, 'Signed agreement saved.', 201);
+  } catch (error) {
+    return fail(res, error, 'Could not store this file.');
+  }
+}
+
+export async function adminRemoveApplicationFile(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    const fileId = routeId(req.params.fileId);
+    if (!z.uuid().safeParse(id).success || !z.uuid().safeParse(fileId).success) {
+      return errorResponse(res, 'File not found.', 404);
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const { removeApplicationFile } = await import('../services/vlbApplicationFiles.service');
+    const files = await removeApplicationFile(req, id, fileId, reason);
+    return successResponse(res, { agreement_files: files }, 'File removed.');
+  } catch (error) {
+    return fail(res, error, 'Could not remove this file.');
+  }
+}
+
+export async function adminSendAgreementLink(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    if (!z.uuid().safeParse(id).success) return errorResponse(res, 'Application not found.', 404);
+    const message = typeof req.body?.message === 'string' ? req.body.message : '';
+    const { sendAgreementUploadLink } = await import('../services/vlbApplicationFiles.service');
+    const data = await sendAgreementUploadLink(req, id, message);
+    return successResponse(res, data, 'Upload link sent.');
+  } catch (error) {
+    return fail(res, error, 'Could not send this upload link.');
+  }
+}
+
+export async function adminGetApplicationFile(req: AuthRequest, res: Response) {
+  try {
+    const id = routeId(req.params.id);
+    const fileId = routeId(req.params.fileId);
+    if (!z.uuid().safeParse(id).success || !z.uuid().safeParse(fileId).success) {
+      return errorResponse(res, 'File not found.', 404);
+    }
+    const { signApplicationFile } = await import('../services/vlbApplicationFiles.service');
+    const data = await signApplicationFile(id, fileId);
+    return successResponse(res, data);
+  } catch (error) {
+    return fail(res, error, 'Could not open this file.');
   }
 }

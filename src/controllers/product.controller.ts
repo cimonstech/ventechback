@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
-import { successResponse, errorResponse, paginatedResponse } from '../utils/responseHandlers';
+import { successResponse, errorResponse, forbiddenResponse, paginatedResponse } from '../utils/responseHandlers';
 import { AuthRequest, staffHasModuleAccess } from '../middleware/auth.middleware';
 
 export const PRE_ORDER_PRODUCT_FIELDS = [
@@ -489,7 +489,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
 
     if (req.user?.role === 'staff' && !(await staffHasModuleAccess(req, 'products', 'edit'))) {
       if (Array.isArray(variants) || !isPreOrderOnlyProductPatch({ ...updates })) {
-        return errorResponse(res, 'Forbidden - Permission required', 403);
+        return forbiddenResponse(res);
       }
     }
 

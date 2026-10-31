@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService, sendInvestmentEmail } from './email.service';
@@ -11,16 +12,22 @@ import {
   snapshotFromPlan,
   totals,
 } from './vlbCalc.service';
+import { activationOnRepeat, renewOnRepeat, settleOnRepeat } from './vlbRepeat';
+
+export { activationOnRepeat, renewOnRepeat, settleOnRepeat } from './vlbRepeat';
 
 export class VlbError extends Error {
   constructor(
     public statusCode: number,
-    message: string
+    message: string,
+    public code = 'vlb_error',
+    public errors: Record<string, string> | null = null
   ) {
     super(message);
     this.name = 'VlbError';
   }
 }
+
 
 type AuditReq = Request & { user?: { id?: string; role?: string } };
 
@@ -89,6 +96,7 @@ export interface ApplicationInput {
   plan_id?: string | null;
   message?: string | null;
   user_id?: string | null;
+  files?: Array<{ buffer: Buffer; size: number; originalname?: string }>;
 }
 
 export interface ActivateInput {
@@ -99,6 +107,7 @@ export interface ActivateInput {
   payment_method: string;
   payment_reference: string;
   agreement_signed_at: string;
+  agreement_checked: boolean;
   allow_principal_override: boolean;
 }
 
@@ -119,7 +128,7 @@ function escapeHtml(value: string): string {
 }
 
 function pesewasLabel(pesewas: number): string {
-  return `GH₵ ${(pesewas / 100).toFixed(2)}`;
+  return formatPesewas(pesewas);
 }
 
 function ratesEqual(left: unknown, right: unknown): boolean {
@@ -498,19 +507,32 @@ async function insertApplication(input: ApplicationInput) {
   return data;
 }
 
-async function emailApplicantReceived(to: string, fullName: string) {
+async function emailApplicantReceived(input: {
+  to: string;
+  fullName: string;
+  uploadUrl?: string | null;
+  hasAgreement: boolean;
+}) {
   const origin = siteOrigin();
+  const uploadBlock = !input.hasAgreement && input.uploadUrl
+    ? `<p>Please upload your signed agreement so we can activate your investment.</p>
+      <p style="margin:24px 0;"><a href="${escapeHtml(input.uploadUrl)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Upload your signed agreement</a></p>
+      <p style="color:#666;font-size:12px;">This link is valid for 14 days. You can add more pages until we activate or decline the application.</p>`
+    : input.hasAgreement
+      ? '<p>We have received your signed agreement. We will contact you shortly.</p>'
+      : '<p>We will contact you shortly.</p>';
   const html = `
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;max-width:600px;margin:0 auto;">
       <h1 style="color:#FF7A19;font-size:22px;">We've received your Laptop Banking application</h1>
-      <p>Hi ${escapeHtml(fullName || 'there')},</p>
-      <p>Thank you for applying to VENTECH Laptop Banking. We have received your application and will contact you shortly.</p>
+      <p>Hi ${escapeHtml(input.fullName || 'there')},</p>
+      <p>Thank you for applying to VENTECH Laptop Banking.</p>
+      ${uploadBlock}
       ${origin ? `<p><a href="${escapeHtml(`${origin}/laptop-banking`)}" style="color:#FF7A19;">View Laptop Banking</a></p>` : ''}
       <p style="color:#666;font-size:12px;margin-top:32px;">VENTECH Gadgets</p>
     </div>
   `;
   const sent = await emailService.sendEmail({
-    to,
+    to: input.to,
     subject: "We've received your Laptop Banking application",
     html,
   }, true);
@@ -519,11 +541,17 @@ async function emailApplicantReceived(to: string, fullName: string) {
   }
 }
 
-export async function submitApplication(input: ApplicationInput) {
+export async function submitApplication(input: ApplicationInput, req?: AuditReq) {
   if (!input.plan_id) throw new VlbError(400, 'Select a plan.');
   const plan = await loadPlan(input.plan_id);
   if (!plan.is_active) throw new VlbError(400, 'This plan is not available.');
   const application = await insertApplication(input);
+  const { saveUploadToken, storeAgreementFiles, uploadPageUrl, applicationHasSignedAgreement } = await import('./vlbApplicationFiles.service');
+  const issued = await saveUploadToken(application.id);
+  if (input.files?.length) {
+    await storeAgreementFiles(req || ({} as AuditReq), application.id, input.files, 'application_form');
+  }
+  const hasAgreement = await applicationHasSignedAgreement(application.id);
   const amountGhs = (Number(plan.principal_pesewas) / 100).toLocaleString('en-US');
   const storeResult = await sendInvestmentEmail({
     fullName: input.full_name,
@@ -537,8 +565,13 @@ export async function submitApplication(input: ApplicationInput) {
   if (!storeResult.success) {
     console.error('vlb store notification email failed');
   }
-  await emailApplicantReceived(input.email, input.full_name);
-  return application;
+  await emailApplicantReceived({
+    to: input.email,
+    fullName: input.full_name,
+    uploadUrl: uploadPageUrl(issued.token),
+    hasAgreement,
+  });
+  return { ...application, upload_token: issued.token, has_signed_agreement: hasAgreement };
 }
 
 export async function submitLegacyInvestment(input: {
@@ -575,7 +608,11 @@ export async function submitLegacyInvestment(input: {
   });
   if (storeResult.success) {
     try {
-      await emailApplicantReceived(input.email, input.fullName);
+      await emailApplicantReceived({
+        to: input.email,
+        fullName: input.fullName,
+        hasAgreement: false,
+      });
     } catch (error) {
       console.error('vlb legacy applicant email failed', error);
     }
@@ -759,11 +796,40 @@ export async function activateApplication(
     throw new VlbError(500, 'Could not load this application.');
   }
   if (!application) throw new VlbError(404, 'Application not found.');
-  if (application.status === 'activated') {
-    throw new VlbError(409, 'This application is already activated.');
-  }
-  if (application.status === 'declined') {
+  const repeat = activationOnRepeat(application.status);
+  if (repeat === 'declined') {
     throw new VlbError(400, 'This application was declined.');
+  }
+  if (repeat === 'proceed') {
+    const { applicationHasSignedAgreement } = await import('./vlbApplicationFiles.service');
+    const hasFile = await applicationHasSignedAgreement(applicationId);
+    if (!hasFile) {
+      throw new VlbError(422, 'Upload the signed agreement before activating.', 'agreement_missing');
+    }
+    if (!input.agreement_checked) {
+      throw new VlbError(400, 'Confirm you have checked the signed agreement is complete and signed.', 'validation', {
+        agreement_checked: 'Confirm you have checked the signed agreement is complete and signed.',
+      });
+    }
+  }
+  if (repeat === 'return_existing') {
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from('vlb_investments')
+      .select('id, investor_id, application_id, investors(investor_no)')
+      .eq('application_id', applicationId)
+      .maybeSingle();
+    if (existingError) {
+      logDb('load existing activation', existingError);
+      throw new VlbError(500, 'Could not load this application.');
+    }
+    if (!existing) throw new VlbError(409, 'This application is already activated.');
+    const investor = Array.isArray(existing.investors) ? existing.investors[0] : existing.investors;
+    return {
+      investment_id: existing.id,
+      investor_id: existing.investor_id,
+      investor_no: (investor as { investor_no?: string } | null)?.investor_no || '',
+      application_id: applicationId,
+    };
   }
 
   const plan = await loadPlan(input.plan_id);
@@ -851,6 +917,19 @@ export async function activateApplication(
     maturityDate,
     schedule,
   });
+
+  try {
+    const { copySignedAgreementToInvestor } = await import('./vlbApplicationFiles.service');
+    await copySignedAgreementToInvestor({
+      applicationId,
+      investorId: result.investor_id,
+      investmentId: result.investment_id,
+      uploadedBy: req.user?.id || null,
+    });
+  } catch (error) {
+    logDb('copy signed agreement', error);
+    throw error;
+  }
 
   return {
     ...result,

@@ -1,6 +1,7 @@
 import { adminNotificationEmail } from '../config/email';
 import { emailService } from './email.service';
 import { deletePrivateObject, getSignedViewUrl } from './privateStorage.service';
+import { formatCedis } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 
 export const TICKET_STATUSES = [
@@ -177,7 +178,7 @@ export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
 };
 
 export function formatTicketGhs(amount: number): string {
-  return `GHS ${Number(amount).toFixed(2)}`;
+  return formatCedis(amount);
 }
 
 export async function insertTicketEvent(input: {
