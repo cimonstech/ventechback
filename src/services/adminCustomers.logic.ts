@@ -170,11 +170,10 @@ export function csvTypeLabel(row: {
   is_affiliate: boolean | null;
   is_investor: boolean | null;
 }): string {
-  const parts: string[] = [];
-  if (row.is_affiliate) parts.push('Affiliate');
-  if (row.is_investor) parts.push('Investor');
-  if (!parts.length) parts.push('Customer');
-  return parts.join('; ');
+  const parts = ['CUST'];
+  if (row.is_affiliate) parts.push('AFF');
+  if (row.is_investor) parts.push('VLB');
+  return parts.join(', ');
 }
 
 export type CustomerQueryInput = {

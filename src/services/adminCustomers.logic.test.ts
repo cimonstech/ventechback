@@ -131,7 +131,11 @@ describe('a user who is both affiliate and investor', () => {
     assert.equal(both.is_investor, true);
     assert.equal(both.investor_no, 'VT-VLB-00004');
     assert.equal(both.active_investments_count, 0);
-    assert.equal(csvTypeLabel(both), 'Affiliate; Investor');
+    assert.equal(csvTypeLabel(both), 'CUST, AFF, VLB');
+    assert.equal(csvTypeLabel({ is_affiliate: false, is_investor: false }), 'CUST');
+    assert.equal(csvTypeLabel({ is_affiliate: true, is_investor: false }), 'CUST, AFF');
+    assert.equal(csvTypeLabel({ is_affiliate: false, is_investor: true }), 'CUST, VLB');
+    assert.equal(csvTypeLabel({ is_affiliate: null, is_investor: null }), 'CUST');
     const asAffiliate = queryCustomers(users, affiliates, investors, investments, { type: 'affiliate' }, full);
     const asInvestor = queryCustomers(users, affiliates, investors, investments, { type: 'investor' }, full);
     assert.ok(asAffiliate.rows.some((row) => row.id === 'd'));
