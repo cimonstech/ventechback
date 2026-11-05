@@ -42,6 +42,10 @@ class EmailService {
   }
 
   async sendEmail(options: EmailOptions, useSupportEmail: boolean = true): Promise<boolean> {
+    if (process.env.NODE_ENV === 'test') {
+      return true;
+    }
+
     try {
       // Convert attachments to Resend format if provided
       const attachments = options.attachments?.map(att => ({

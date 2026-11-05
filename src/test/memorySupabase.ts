@@ -60,7 +60,11 @@ export function createMemorySupabase(seed: Record<string, Row[]> = {}) {
     await Promise.resolve();
     const inserted: Row[] = [];
     for (const incoming of rows) {
-      const row = { id: incoming.id || randomUUID(), created_at: incoming.created_at || new Date().toISOString(), ...incoming };
+      const row: Row = {
+        id: incoming.id || randomUUID(),
+        created_at: incoming.created_at || new Date().toISOString(),
+        ...incoming,
+      };
       if (table === 'orders') {
         if (tables.orders.some((existing) => existing.order_number && existing.order_number === row.order_number)) {
           return { data: null, error: uniqueError('orders_order_number_key', `Key (order_number)=(${row.order_number}) already exists.`) };
