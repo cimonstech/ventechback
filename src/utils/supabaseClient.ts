@@ -13,12 +13,16 @@ if (!supabaseServiceKey) {
 }
 
 // Admin client with service role key (bypasses RLS)
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+export let supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false,
   },
 });
+
+export function setSupabaseAdminForTests(client: typeof supabaseAdmin): void {
+  supabaseAdmin = client;
+}
 
 console.log('✅ Supabase Admin Client initialized');
 

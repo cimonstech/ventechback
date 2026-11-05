@@ -1,5 +1,9 @@
-import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import {
+  isPaystackTimeout,
+  paystackVerifyTimeoutMessage,
+  verifyPaystackTransaction,
+} from './paystackClient';
 import {
   FREE_DELIVERY_THRESHOLD,
   PRE_ORDER_SHIPPING_PRICES,
@@ -51,8 +55,11 @@ export function shopperPricingMessage(error: PricingError): string {
         ? error.message
         : 'That coupon does not apply to this cart.';
     case 'PAYSTACK_NOT_CONFIGURED':
+    case 'PAYSTACK_TIMEOUT':
     case 'PAYMENT_VERIFICATION_FAILED':
-      return "We couldn't confirm your payment yet. If you were charged, contact support with your payment reference. You won't be charged twice.";
+      return paystackVerifyTimeoutMessage(
+        typeof error.extra?.reference === 'string' ? error.extra.reference : null
+      );
     case 'PAYMENT_NOT_SUCCESSFUL':
       return "This payment didn't go through. You haven't been charged.";
     default:
@@ -277,12 +284,17 @@ export async function verifyPaystackPayment(reference: string): Promise<{ amount
 
   let transaction: any;
   try {
-    const response = await axios.get(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${secretKey}` }, timeout: 15000 }
-    );
+    const response = await verifyPaystackTransaction(reference);
     transaction = response.data?.data;
   } catch (error: any) {
+    if (isPaystackTimeout(error)) {
+      throw new PricingError(
+        paystackVerifyTimeoutMessage(reference),
+        'PAYSTACK_TIMEOUT',
+        502,
+        { reference }
+      );
+    }
     console.error('Paystack verification request failed:', error?.response?.data || error?.message);
     throw new PricingError('Could not verify payment with Paystack', 'PAYMENT_VERIFICATION_FAILED', 402);
   }

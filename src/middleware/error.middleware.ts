@@ -6,6 +6,17 @@ export const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    const path = String(req.originalUrl || req.path || '');
+    if (path.includes('/api/payments/webhook')) {
+      console.error('[webhook-too-large]', req.headers['content-length'] || err.length || '');
+    }
+    return res.status(413).json({
+      success: false,
+      message: 'This request is too large.',
+    });
+  }
+
   console.error('Error:', req.originalUrl, err);
 
   const statusCode = err.statusCode || 500;

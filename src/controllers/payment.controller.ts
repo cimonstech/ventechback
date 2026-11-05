@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { Request, Response } from 'express';
-import axios from 'axios';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { PricingError, priceOrder, shopperPricingMessage } from '../services/pricing.service';
@@ -8,6 +7,13 @@ import { AffiliateError, applyAffiliateFeePaid } from '../services/affiliate.ser
 import { mapPaystackChargeStatus, paystackChargeMessage } from '../services/paystack.status';
 import { maybeCreateCommissionForPayment } from '../services/affiliateCommission.service';
 import { tryCreatePendingDevicesForOrder } from '../services/deviceRegistration.service';
+import {
+  PAYSTACK_INITIALIZE_FAILED,
+  initializePaystackTransaction,
+  isPaystackTimeout,
+  paystackVerifyTimeoutMessage,
+  verifyPaystackTransaction,
+} from '../services/paystackClient';
 
 export class PaymentController {
   // Initialize Paystack transaction (from backend as per Paystack best practices)
@@ -38,7 +44,7 @@ export class PaymentController {
         console.error('Paystack secret key not configured');
         return res.status(500).json({
           success: false,
-          message: "We couldn't start your payment. Please try again.",
+          message: PAYSTACK_INITIALIZE_FAILED,
         });
       }
 
@@ -114,17 +120,7 @@ export class PaymentController {
         payload.metadata = metadata;
       }
 
-      // Initialize transaction with Paystack
-      const response = await axios.post(
-        'https://api.paystack.co/transaction/initialize',
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${paystackSecretKey}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await initializePaystackTransaction(payload);
 
       if (response.data.status) {
         return res.json({
@@ -136,7 +132,7 @@ export class PaymentController {
         console.error('Paystack initialize returned status false:', response.data);
         return res.status(400).json({
           success: false,
-          message: "We couldn't start your payment. Please try again.",
+          message: PAYSTACK_INITIALIZE_FAILED,
         });
       }
     } catch (error: any) {
@@ -147,10 +143,17 @@ export class PaymentController {
         });
       }
 
+      if (isPaystackTimeout(error)) {
+        return res.status(502).json({
+          success: false,
+          message: PAYSTACK_INITIALIZE_FAILED,
+        });
+      }
+
       console.error('Error initializing Paystack transaction:', error);
       return res.status(500).json({
         success: false,
-        message: "We couldn't start your payment. Please try again.",
+        message: PAYSTACK_INITIALIZE_FAILED,
       });
     }
   }
@@ -175,15 +178,7 @@ export class PaymentController {
         });
       }
 
-      // Verify transaction with Paystack
-      const response = await axios.get(
-        `https://api.paystack.co/transaction/verify/${reference}`,
-        {
-          headers: {
-            Authorization: `Bearer ${paystackSecretKey}`,
-          },
-        }
-      );
+      const response = await verifyPaystackTransaction(reference);
 
       if (response.data.status) {
         const transaction = response.data.data;
@@ -348,6 +343,12 @@ export class PaymentController {
         message: paystackChargeMessage(unknownStatus, reference),
       });
     } catch (error: any) {
+      if (isPaystackTimeout(error)) {
+        return res.status(502).json({
+          success: false,
+          message: paystackVerifyTimeoutMessage(reference),
+        });
+      }
       console.error('Error verifying Paystack transaction:', error);
       const paystackStatus = error?.response?.status;
       if (paystackStatus === 429) {
@@ -368,7 +369,7 @@ export class PaymentController {
       const paystackFailed = Boolean(error?.isAxiosError || error?.response || error?.request);
       return res.status(paystackFailed ? 502 : 500).json({
         success: false,
-        message: "We couldn't confirm your payment yet. If you were charged, contact support with your payment reference. You won't be charged twice.",
+        message: paystackVerifyTimeoutMessage(reference),
       });
     }
   }

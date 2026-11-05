@@ -1,4 +1,3 @@
-import axios from 'axios';
 import crypto from 'crypto';
 import { Request } from 'express';
 import { adminNotificationEmail } from '../config/email';
@@ -7,6 +6,7 @@ import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
 import { affiliateSettings } from './affiliateSettings.service';
+import { initializePaystackTransaction, verifyPaystackTransaction } from './paystackClient';
 
 export class AffiliateError extends Error {
   constructor(
@@ -397,13 +397,7 @@ async function paystackInitialize(payload: Record<string, unknown>) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) throw new AffiliateError(500, 'Could not start the payment.');
   try {
-    const response = await axios.post('https://api.paystack.co/transaction/initialize', payload, {
-      headers: {
-        Authorization: `Bearer ${secret}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 15000,
-    });
+    const response = await initializePaystackTransaction(payload);
     if (!response.data?.status || !response.data?.data) {
       logDb('paystack initialize affiliate fee', response.data);
       throw new AffiliateError(502, 'Could not start the payment.');
@@ -424,13 +418,7 @@ async function paystackVerify(reference: string) {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) throw new AffiliateError(500, 'Could not verify this payment.');
   try {
-    const response = await axios.get(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      {
-        headers: { Authorization: `Bearer ${secret}` },
-        timeout: 15000,
-      }
-    );
+    const response = await verifyPaystackTransaction(reference);
     return response.data?.data || null;
   } catch (error) {
     logDb('paystack verify affiliate fee', error);
