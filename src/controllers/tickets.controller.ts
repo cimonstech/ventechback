@@ -356,7 +356,7 @@ export async function createTicket(req: AuthRequest, res: Response) {
       return errorResponse(res, 'Could not submit this request', 500);
     }
 
-    await emailTicketReceived(req.user?.email || '', ticket.ticket_no);
+    const emailSent = await emailTicketReceived(req.user?.email || '', ticket.ticket_no);
     await emailAdminNewTicket({
       ticketId: ticket.id,
       ticketNo: ticket.ticket_no,
@@ -375,6 +375,10 @@ export async function createTicket(req: AuthRequest, res: Response) {
       id: ticket.id,
       ticket_no: ticket.ticket_no,
       status: 'submitted',
+      email_sent: emailSent,
+      laptop_model: laptopModel,
+      issue_name: issue.name,
+      date_started: body.date_started,
     }, 'Service request submitted.', 201);
   } catch (error) {
     logDb('create ticket', error);

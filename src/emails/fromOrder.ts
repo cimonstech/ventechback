@@ -4,6 +4,7 @@ import {
   formatMoneyGhs,
 } from './copy';
 import type { EmailDetailRow, EmailLineItem } from './types';
+import { productNameWithOptions } from '../utils/orderItemOptions';
 
 export type OrderEmailInput = {
   id?: string;
@@ -54,7 +55,10 @@ export function orderItems(order: OrderEmailInput): EmailLineItem[] {
     const unitPrice = num(item.unit_price ?? item.price ?? item.discount_price);
     const lineTotal = item.subtotal != null ? num(item.subtotal) : unitPrice * quantity;
     return {
-      name: str(item.product_name ?? item.name ?? item.gadget_name) || 'Item',
+      name: productNameWithOptions(
+        str(item.product_name ?? item.name ?? item.gadget_name) || 'Item',
+        item.selected_variants
+      ),
       quantity,
       unitPrice,
       lineTotal,

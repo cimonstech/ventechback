@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { formatCedisPdf, formatPesewasPdf } from '../utils/money';
+import { productNameWithOptions } from '../utils/orderItemOptions';
 import { drawFooter, drawHeader, drawHeaderFallback, PDF_BRAND } from './pdfBrand';
 
 interface OrderData {
@@ -619,7 +620,12 @@ class PDFService {
       // Product name - no pre-order badge (removed black rectangle)
       doc.fontSize(9) // Reduced from 10
          .fillColor('#1A1A1A')
-         .text(item.product_name || 'Unknown Product', 50, currentY, { width: 220, lineBreak: false, ellipsis: true });
+         .text(
+           productNameWithOptions(item.product_name || 'Unknown Product', item.selected_variants),
+           50,
+           currentY,
+           { width: 220, lineBreak: false, ellipsis: true }
+         );
       
       // Quantity, unit price, and total
       doc.fontSize(9) // Reduced from 10

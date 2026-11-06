@@ -8,7 +8,7 @@
     "dev:clean": "kill-port.bat && nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --require ts-node/register/transpile-only --require ./src/testenv.ts --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts src/services/paystack.status.test.ts src/services/paymentFailureEmail.test.ts src/services/stagingFixes.test.ts src/middleware/vlbMoney.permission.test.ts src/services/vlbSignedAgreement.test.ts src/services/adminCustomers.logic.test.ts src/services/adminCustomers.service.test.ts src/services/orderPayment.logic.test.ts src/controllers/createOrder.race.test.ts src/controllers/payment.timeout.test.ts src/app.bodyLimit.test.ts src/emails/emails.test.ts",
+    "test": "node --require ts-node/register/transpile-only --require ./src/testenv.ts --test src/services/vlbCalc.service.test.ts src/services/pricing.coverage.test.ts src/services/affiliateCommission.service.test.ts src/services/superadmin.visibility.test.ts src/services/paystack.status.test.ts src/services/paymentFailureEmail.test.ts src/utils/orderItemOptions.test.ts src/utils/stagingUiContracts.test.ts src/services/stagingFixes.test.ts src/middleware/vlbMoney.permission.test.ts src/services/vlbSignedAgreement.test.ts src/services/adminCustomers.logic.test.ts src/services/adminCustomers.service.test.ts src/services/orderPayment.logic.test.ts src/controllers/createOrder.race.test.ts src/controllers/payment.timeout.test.ts src/app.bodyLimit.test.ts src/emails/emails.test.ts",
     "emails:preview": "node --require ts-node/register/transpile-only scripts/render-email-previews.ts"
   },
   "keywords": [

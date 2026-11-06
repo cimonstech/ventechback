@@ -147,6 +147,7 @@ export async function priceOrder(input: {
 
   const linkedOptions = new Set<string>();
   const optionsById = new Map<string, any>();
+  const attributeNameById = new Map<string, string>();
   if (optionIds.size > 0) {
     const [{ data: links, error: linksError }, { data: options, error: optionsError }] = await Promise.all([
       supabaseAdmin
@@ -162,6 +163,17 @@ export async function priceOrder(input: {
     if (optionsError) throw optionsError;
     (links || []).forEach((l: any) => linkedOptions.add(`${l.product_id}:${l.option_id}`));
     (options || []).forEach((o: any) => optionsById.set(o.id, o));
+    const attributeIds = [...new Set((options || []).map((o: any) => o.attribute_id).filter(Boolean))];
+    if (attributeIds.length > 0) {
+      const { data: attributes, error: attributesError } = await supabaseAdmin
+        .from('product_attributes')
+        .select('id, name')
+        .in('id', attributeIds);
+      if (attributesError) throw attributesError;
+      (attributes || []).forEach((row: any) => {
+        if (row?.id && row?.name) attributeNameById.set(row.id, String(row.name));
+      });
+    }
   }
 
   const pricedItems: PricedItem[] = items.map((item) => {
@@ -176,7 +188,13 @@ export async function priceOrder(input: {
       }
 
       if (id.startsWith('default-')) {
-        selectedVariants[key] = { id, name: variant.name || 'Default', value: 'default', price_adjustment: 0 };
+        selectedVariants[key] = {
+          id,
+          name: variant.name || 'Default',
+          value: 'default',
+          attribute_name: variant.attribute_name || variant.attributeName || undefined,
+          price_adjustment: 0,
+        };
         continue;
       }
 
@@ -194,6 +212,7 @@ export async function priceOrder(input: {
         id: option.id,
         name: option.label,
         value: option.value,
+        attribute_name: attributeNameById.get(option.attribute_id) || undefined,
         price_adjustment: priceAdjustment,
       };
     }

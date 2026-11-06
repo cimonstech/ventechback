@@ -118,10 +118,10 @@ export function adminTicketUrl(ticketId: string): string | null {
   return `${site}/admin/tickets/${ticketId}`;
 }
 
-async function sendTicketEmail(to: string, rendered: RenderedEmail): Promise<void> {
+async function sendTicketEmail(to: string, rendered: RenderedEmail): Promise<boolean> {
   if (!to) {
     console.error('Ticket email skipped: no recipient');
-    return;
+    return false;
   }
   try {
     const sent = await emailService.sendEmail({
@@ -132,13 +132,15 @@ async function sendTicketEmail(to: string, rendered: RenderedEmail): Promise<voi
       rendered,
     });
     if (!sent) console.error('Ticket email was not sent:', rendered.subject);
+    return sent;
   } catch (error) {
     console.error('Ticket email failed:', rendered.subject, error);
+    return false;
   }
 }
 
-export async function emailTicketReceived(to: string, ticketNo: string): Promise<void> {
-  await sendTicketEmail(to, ticketReceived({ ticketNo }));
+export async function emailTicketReceived(to: string, ticketNo: string): Promise<boolean> {
+  return sendTicketEmail(to, ticketReceived({ ticketNo }));
 }
 
 export async function emailAdminNewTicket(input: {

@@ -78,6 +78,11 @@ export function layoutHtml(input: LayoutInput): string {
       .email-outer { padding: 16px 12px !important; }
       .email-pad { padding: 20px !important; }
     }
+    @media only screen and (max-width: 480px) {
+      .email-btn { width: 100% !important; }
+      .email-btn td { width: 100% !important; }
+      .email-btn a { display: block !important; width: 100% !important; text-align: center !important; white-space: normal !important; }
+    }
   </style>
 </head>
 <body style="margin:0;padding:0;background-color:${EMAIL_COLOURS.page};">

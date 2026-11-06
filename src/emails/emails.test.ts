@@ -72,6 +72,8 @@ describe('email templates', () => {
     assert.ok(email);
     assert.match(email.html, /Hi Kwame,/);
     assert.match(email.html, /#C2410C/);
+    assert.match(email.html, /#1A1A1A/);
+    assert.match(email.html, /View order ORD-003051126/);
     assert.match(email.text, /View order ORD-003051126/);
   });
 });

@@ -8,7 +8,10 @@ export const EMAIL_COLOURS = {
   text: '#1A1A1A',
   secondary: '#525252',
   border: '#E7E5E4',
+  /** Body text links stay terracotta. */
   button: '#C2410C',
+  /** Primary CTA button fill (black). */
+  buttonBg: '#1A1A1A',
   buttonText: '#FFFFFF',
   page: '#F5F5F4',
   card: '#FFFFFF',
@@ -47,13 +50,24 @@ export function secondaryText(text: string): string {
 }
 
 export function button(label: string, href: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 24px;">
+  const safeHref = escapeAttr(href);
+  const safeLabel = escapeHtml(label);
+  // Bulletproof button: padded table cell + VML for Outlook; left-aligned with content.
+  return `<!--[if mso]>
+  <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${safeHref}" style="height:44px;v-text-anchor:middle;width:280px;" arcsize="14%" stroke="f" fillcolor="${EMAIL_COLOURS.buttonBg}">
+    <w:anchorlock/>
+    <center style="color:${EMAIL_COLOURS.buttonText};font-family:Segoe UI,sans-serif;font-size:16px;font-weight:700;">${safeLabel}</center>
+  </v:roundrect>
+  <![endif]-->
+  <!--[if !mso]><!-- -->
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="email-btn" style="margin:8px 0 24px;border-collapse:separate;">
   <tr>
-    <td align="center" bgcolor="${EMAIL_COLOURS.button}" style="border-radius:8px;">
-      <a href="${escapeAttr(href)}" style="display:inline-block;min-height:44px;padding:12px 24px;font-family:${FONT};font-size:16px;line-height:20px;font-weight:700;color:${EMAIL_COLOURS.buttonText};text-decoration:none;">${escapeHtml(label)}</a>
+    <td align="left" bgcolor="${EMAIL_COLOURS.buttonBg}" style="background-color:${EMAIL_COLOURS.buttonBg};border-radius:6px;mso-padding-alt:14px 24px;">
+      <a href="${safeHref}" style="display:inline-block;box-sizing:border-box;min-height:44px;padding:14px 24px;font-family:${FONT};font-size:16px;line-height:16px;font-weight:700;color:${EMAIL_COLOURS.buttonText};text-decoration:none;white-space:nowrap;vertical-align:middle;">${safeLabel}</a>
     </td>
   </tr>
-</table>`;
+</table>
+  <!--<![endif]-->`;
 }
 
 export function secondaryLink(label: string, href: string): string {
