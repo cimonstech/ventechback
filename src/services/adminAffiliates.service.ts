@@ -1,5 +1,11 @@
 import { Request } from 'express';
-import { formatPesewas } from '../utils/money';
+import {
+  affiliateApproved,
+  affiliateRejected,
+  affiliateWithdrawalPaid,
+  affiliateWithdrawalRejected,
+  affiliateWithdrawalStatus,
+} from '../emails';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -228,17 +234,19 @@ export async function approveAffiliate(req: AuditReq, id: string) {
   const publicInfo = await affiliateSettings.publicInfo();
   try {
     if (user?.email) {
+      const rendered = affiliateApproved({
+        firstName: userName(user),
+        affiliateNo: activated.affiliate_no,
+        link: links?.general || null,
+        commissionCopy: publicInfo.commission_copy,
+      });
       await emailService.sendEmail(
         {
           to: user.email,
-          subject: 'Your affiliate account is active',
-          html: `
-            <p>Hi ${escapeHtml(userName(user))},</p>
-            <p>Your VENTECH affiliate account is active. Your code is ${escapeHtml(activated.affiliate_no || '')}.</p>
-            ${links?.general ? `<p>Share this link: ${escapeHtml(links.general)}</p>` : ''}
-            <p>${escapeHtml(publicInfo.commission_copy)}</p>
-            <p>VENTECH Gadgets</p>
-          `,
+          subject: rendered.subject,
+          html: rendered.html,
+      text: rendered.text,
+      rendered,
         },
         false
       );
@@ -280,16 +288,14 @@ export async function rejectAffiliate(req: AuditReq, id: string, reason: string)
   const user = await loadUser(row.user_id);
   try {
     if (user?.email) {
+      const rendered = affiliateRejected({ firstName: userName(user), reason });
       await emailService.sendEmail(
         {
           to: user.email,
-          subject: 'Your affiliate application was not approved',
-          html: `
-            <p>Hi ${escapeHtml(userName(user))},</p>
-            <p>Your affiliate application was not approved.</p>
-            <p>${escapeHtml(reason)}</p>
-            <p>VENTECH Gadgets</p>
-          `,
+          subject: rendered.subject,
+          html: rendered.html,
+      text: rendered.text,
+      rendered,
         },
         false
       );
@@ -536,16 +542,31 @@ export async function updateWithdrawalStatus(
   const user = affiliate ? await loadUser(affiliate.user_id) : null;
   try {
     if (user?.email) {
+      const rendered = input.to === 'paid'
+        ? affiliateWithdrawalPaid({
+            firstName: userName(user),
+            amountPesewas: updated.amount_pesewas,
+            reason: input.reason,
+          })
+        : input.to === 'rejected'
+          ? affiliateWithdrawalRejected({
+              firstName: userName(user),
+              amountPesewas: updated.amount_pesewas,
+              reason: input.reason,
+            })
+          : affiliateWithdrawalStatus({
+              firstName: userName(user),
+              amountPesewas: updated.amount_pesewas,
+              status: input.to,
+              reason: input.reason,
+            });
       await emailService.sendEmail(
         {
           to: user.email,
-          subject: `Withdrawal ${input.to}`,
-          html: `
-            <p>Hi ${escapeHtml(userName(user))},</p>
-            <p>Your withdrawal of ${formatPesewas(updated.amount_pesewas)} is now ${escapeHtml(input.to)}.</p>
-            ${input.reason ? `<p>${escapeHtml(input.reason)}</p>` : ''}
-            <p>VENTECH Gadgets</p>
-          `,
+          subject: rendered.subject,
+          html: rendered.html,
+      text: rendered.text,
+      rendered,
         },
         false
       );

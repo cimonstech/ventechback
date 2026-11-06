@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { affiliateCommissionPending, affiliateCommissionReversed } from '../emails';
 import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
@@ -232,16 +233,14 @@ async function emailAffiliatePending(affiliateId: string, amountPesewas: number)
   const user = await loadAffiliateUser(affiliateId);
   if (!user?.email) return;
   const name = user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ') || 'there';
+  const rendered = affiliateCommissionPending({ firstName: name, amountPesewas });
   await emailService.sendEmail(
     {
       to: user.email,
-      subject: 'A commission is pending on your account',
-      html: `
-        <p>Hi ${escapeHtml(name)},</p>
-        <p>A commission of ${escapeHtml(pesewasLabel(amountPesewas))} is pending on your affiliate account.</p>
-        <p>It becomes eligible after the order is delivered and the return window closes.</p>
-        <p>VENTECH Gadgets</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     },
     false
   );
@@ -251,15 +250,14 @@ async function emailAffiliateReversal(affiliateId: string, amountPesewas: number
   const user = await loadAffiliateUser(affiliateId);
   if (!user?.email) return;
   const name = user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ') || 'there';
+  const rendered = affiliateCommissionReversed({ firstName: name, amountPesewas, reason });
   await emailService.sendEmail(
     {
       to: user.email,
-      subject: 'A commission was reversed',
-      html: `
-        <p>Hi ${escapeHtml(name)},</p>
-        <p>A commission of ${escapeHtml(pesewasLabel(amountPesewas))} was reversed${reason ? `: ${escapeHtml(reason)}` : '.'}</p>
-        <p>VENTECH Gadgets</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     },
     false
   );

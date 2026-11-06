@@ -13,6 +13,7 @@ import {
 import { ghsToPesewas, paymentCoversOrderTotals } from '../services/pricing.money';
 import enhancedEmailService from '../services/enhanced-email.service';
 import { adminNotificationEmail } from '../config/email';
+import { outOfStock } from '../emails';
 import pdfService from '../services/pdf.service';
 import { logAudit } from '../services/audit.service';
 import { resolveReferralAttribution } from '../services/affiliate.service';
@@ -751,11 +752,8 @@ export class OrderController {
             cancellation_reason,
           };
 
-          // Note: Using order confirmation template for cancellation
-          const emailResult = await enhancedEmailService.sendOrderConfirmation(emailData);
-          if (emailResult.skipped) {
-            console.log(`Order cancellation email skipped: ${emailResult.reason}`);
-          } else if (emailResult.success) {
+          const emailResult = await enhancedEmailService.sendOrderCancellation(emailData);
+          if (emailResult.success) {
             console.log('Order cancellation email sent successfully to customer');
           } else {
             console.error('Failed to send order cancellation email:', emailResult.reason);
@@ -1186,24 +1184,17 @@ export class OrderController {
                           
                           // Send email to admin
                           try {
+                            const rendered = outOfStock({
+                              name: updatedProduct.name,
+                              productId: item.product_id,
+                            });
                             const emailSent = await enhancedEmailService.sendEmail({
                               to: adminNotificationEmail,
-                              subject: `🚨 Product Out of Stock: ${updatedProduct.name}`,
-                              html: `
-                                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                                  <h2 style="color: #EF4444;">Product Out of Stock Alert</h2>
-                                  <p>The following product has run out of stock:</p>
-                                  <div style="background: #FEF2F2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0;">
-                                    <p style="margin: 0; font-weight: bold; color: #991B1B;">${updatedProduct.name}</p>
-                                    <p style="margin: 5px 0 0 0; color: #7F1D1D;">Product ID: ${item.product_id}</p>
-                                  </div>
-                                  <p>Please restock this product as soon as possible.</p>
-                                  <p style="margin-top: 30px; color: #6B7280; font-size: 12px;">
-                                    This is an automated notification from Ventech Gadgets.
-                                  </p>
-                                </div>
-                              `,
-                            }, false); // Use noreply email
+                              subject: rendered.subject,
+                              html: rendered.html,
+                              text: rendered.text,
+                              rendered,
+                            }, false);
                             
                             if (emailSent) {
                               console.log(`✅ Out of stock email sent for product ${updatedProduct.name}`);

@@ -14,6 +14,7 @@ import {
   paystackVerifyTimeoutMessage,
   verifyPaystackTransaction,
 } from '../services/paystackClient';
+import { maybeNotifyPaymentFailure } from '../services/paymentFailureEmail.service';
 
 export class PaymentController {
   // Initialize Paystack transaction (from backend as per Paystack best practices)
@@ -316,6 +317,47 @@ export class PaymentController {
             } catch (updateError) {
               console.error('Error updating order payment status:', updateError);
             }
+          } else {
+            // Declined charge only (raw Paystack status "failed"). Never abandoned/pending/timeout.
+            // At most once per reference via jobs_runs.
+            await maybeNotifyPaymentFailure({
+              rawPaystackStatus: transaction.status,
+              orderId: orderIdToUpdate,
+              reference: String(transaction.reference || reference),
+              loadOrder: async () => {
+                if (!orderIdToUpdate) return null;
+                const { data: failedOrder } = await supabaseAdmin
+                  .from('orders')
+                  .select(
+                    'id, order_number, total, payment_method, customer_bio, shipping_address, user:users(email, first_name, last_name, full_name)'
+                  )
+                  .eq('id', orderIdToUpdate)
+                  .maybeSingle();
+                if (!failedOrder) return null;
+                const user = Array.isArray((failedOrder as any)?.user)
+                  ? (failedOrder as any).user[0]
+                  : (failedOrder as any)?.user;
+                const customerEmail =
+                  user?.email ||
+                  transactionData.customer_email ||
+                  (failedOrder as any)?.customer_bio?.email ||
+                  (failedOrder as any)?.shipping_address?.email ||
+                  '';
+                if (!customerEmail) return null;
+                const customerName =
+                  user?.full_name ||
+                  [user?.first_name, user?.last_name].filter(Boolean).join(' ') ||
+                  (failedOrder as any)?.customer_bio?.name ||
+                  'Customer';
+                return {
+                  ...failedOrder,
+                  customer_email: customerEmail,
+                  customer_name: customerName,
+                  payment_method: failedOrder.payment_method || 'paystack',
+                  payment_status: 'failed',
+                };
+              },
+            });
           }
         } catch (dbError) {
           console.error('Error saving transaction:', dbError);

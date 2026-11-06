@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
+import { vlbAgreementUpload } from '../emails';
 import { emailService } from './email.service';
 import { siteOrigin } from './affiliate.service';
 import { copyPrivateObject, getSignedViewUrl, putPrivateObject } from './privateStorage.service';
@@ -401,20 +402,17 @@ export async function sendAgreementUploadLink(
   const url = uploadPageUrl(issued.token);
   if (!url) throw new VlbError(500, 'Could not create an upload link.');
   const note = (message || '').trim();
-  const html = `
-    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;max-width:600px;margin:0 auto;">
-      <h1 style="color:#FF7A19;font-size:22px;">Upload your signed Laptop Banking agreement</h1>
-      <p>Hi ${escapeHtml(application.full_name || 'there')},</p>
-      <p>Please download the blank agreement, sign it, and upload a clear scan or photos of every page.</p>
-      ${note ? `<p>${escapeHtml(note)}</p>` : ''}
-      <p style="margin:24px 0;"><a href="${escapeHtml(url)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Upload your signed agreement</a></p>
-      <p style="color:#666;font-size:12px;">This link is valid for 14 days.</p>
-    </div>
-  `;
+  const rendered = vlbAgreementUpload({
+    firstName: application.full_name,
+    uploadUrl: url,
+    message: note || null,
+  });
   const sent = await emailService.sendEmail({
     to: application.email,
-    subject: 'Upload your signed Laptop Banking agreement',
-    html,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   }, true);
   if (!sent) console.error('vlb agreement upload link email failed');
   await logAudit({

@@ -40,6 +40,7 @@ export function createMemorySupabase(seed: Record<string, Row[]> = {}) {
     categories: [],
     devices: [],
     coupons: [],
+    jobs_runs: [],
     ...Object.fromEntries(Object.entries(seed).map(([key, rows]) => [key, rows.map((row) => ({ ...row }))])),
   };
 
@@ -269,6 +270,51 @@ export function createMemorySupabase(seed: Record<string, Row[]> = {}) {
       product.in_stock = product.stock_quantity > 0;
       stats.stockDecrements += 1;
       return { data: product, error: null };
+    }
+    if (name === 'claim_job_run') {
+      const jobName = String(args.p_job_name || '').trim();
+      const periodKey = String(args.p_period_key || '').trim();
+      if (!jobName || !periodKey) return { data: { claimed: false }, error: null };
+      tables.jobs_runs = tables.jobs_runs || [];
+      const existing = tables.jobs_runs.find(
+        (row) => row.job_name === jobName && row.period_key === periodKey
+      );
+      if (!existing) {
+        const row = {
+          id: randomUUID(),
+          job_name: jobName,
+          period_key: periodKey,
+          status: 'running',
+          started_at: new Date().toISOString(),
+          finished_at: null,
+          counts: null,
+          error: null,
+        };
+        tables.jobs_runs.push(row);
+        return { data: { claimed: true, id: row.id }, error: null };
+      }
+      if (existing.status === 'succeeded') {
+        return { data: { claimed: false, id: existing.id }, error: null };
+      }
+      if (existing.status === 'running') {
+        return { data: { claimed: false, id: existing.id }, error: null };
+      }
+      existing.status = 'running';
+      existing.started_at = new Date().toISOString();
+      existing.finished_at = null;
+      existing.counts = null;
+      existing.error = null;
+      return { data: { claimed: true, id: existing.id }, error: null };
+    }
+    if (name === 'finish_job_run') {
+      const row = (tables.jobs_runs || []).find((item) => item.id === args.p_id);
+      if (row && row.status === 'running') {
+        row.status = args.p_status;
+        row.finished_at = new Date().toISOString();
+        row.counts = args.p_counts || null;
+        row.error = args.p_status === 'failed' ? String(args.p_error || '').slice(0, 500) : null;
+      }
+      return { data: null, error: null };
     }
     return { data: null, error: { code: 'PGRST202', message: `function ${name} not found` } };
   }

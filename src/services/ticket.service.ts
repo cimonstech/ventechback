@@ -1,4 +1,14 @@
 import { adminNotificationEmail } from '../config/email';
+import {
+  adminNewTicket,
+  adminTicketMessage,
+  ticketReady,
+  ticketReceipt,
+  ticketReceived,
+  ticketStaffReply,
+  ticketStatus,
+  type RenderedEmail,
+} from '../emails';
 import { emailService } from './email.service';
 import { deletePrivateObject, getSignedViewUrl } from './privateStorage.service';
 import { formatCedis } from '../utils/money';
@@ -108,33 +118,27 @@ export function adminTicketUrl(ticketId: string): string | null {
   return `${site}/admin/tickets/${ticketId}`;
 }
 
-async function sendTicketEmail(to: string, subject: string, html: string): Promise<void> {
+async function sendTicketEmail(to: string, rendered: RenderedEmail): Promise<void> {
   if (!to) {
     console.error('Ticket email skipped: no recipient');
     return;
   }
   try {
-    const sent = await emailService.sendEmail({ to, subject, html });
-    if (!sent) console.error('Ticket email was not sent:', subject);
+    const sent = await emailService.sendEmail({
+      to,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
+    });
+    if (!sent) console.error('Ticket email was not sent:', rendered.subject);
   } catch (error) {
-    console.error('Ticket email failed:', subject, error);
+    console.error('Ticket email failed:', rendered.subject, error);
   }
 }
 
-function emailShell(heading: string, body: string): string {
-  return `<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;margin:0 auto;padding:24px;">
-    <h1 style="font-size:22px;margin:0 0 16px;">${escapeHtml(heading)}</h1>
-    ${body}
-  </div>`;
-}
-
 export async function emailTicketReceived(to: string, ticketNo: string): Promise<void> {
-  const heading = `We've received your service request ${ticketNo}`;
-  await sendTicketEmail(
-    to,
-    heading,
-    emailShell(heading, '<p>We have your request and will update you as it moves forward.</p>')
-  );
+  await sendTicketEmail(to, ticketReceived({ ticketNo }));
 }
 
 export async function emailAdminNewTicket(input: {
@@ -143,28 +147,19 @@ export async function emailAdminNewTicket(input: {
   issue: string;
   model: string;
 }): Promise<void> {
-  const heading = `New service request ${input.ticketNo}: ${input.issue} on ${input.model}`;
-  const link = adminTicketUrl(input.ticketId);
-  if (!link) console.error('Ticket admin email has no site URL for the admin ticket link');
-  const button = link
-    ? `<p style="margin:24px 0;"><a href="${escapeHtml(link)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Open ticket</a></p>`
-    : '';
-  await sendTicketEmail(
-    adminNotificationEmail,
-    heading,
-    emailShell(heading, `<p>${escapeHtml(input.issue)} on ${escapeHtml(input.model)}.</p>${button}`)
-  );
+  await sendTicketEmail(adminNotificationEmail, adminNewTicket(input));
 }
 
 export async function emailStatusChanged(to: string, ticketNo: string, status: TicketStatus, note: string | null): Promise<void> {
-  const heading = `Your request ${ticketNo} is now: ${STATUS_LABEL[status]}`;
-  const noteHtml = note ? `<p>${escapeHtml(note)}</p>` : '';
-  await sendTicketEmail(to, heading, emailShell(heading, `${noteHtml}<p>${escapeHtml(heading)}</p>`));
+  if (status === 'ready') {
+    await sendTicketEmail(to, ticketReady({ ticketNo, note }));
+    return;
+  }
+  await sendTicketEmail(to, ticketStatus({ ticketNo, status, note }));
 }
 
 export async function emailStaffReply(to: string, ticketNo: string, body: string): Promise<void> {
-  const heading = `New reply on your request ${ticketNo}`;
-  await sendTicketEmail(to, heading, emailShell(heading, `<p>${escapeHtml(body)}</p>`));
+  await sendTicketEmail(to, ticketStaffReply({ ticketNo, body }));
 }
 
 export const PAYMENT_METHODS = ['cash', 'momo', 'card', 'bank_transfer'] as const;
@@ -252,25 +247,17 @@ export async function emailPaymentReceipt(input: {
   reference: string | null;
   paidAt: string;
 }): Promise<void> {
-  const contact = await storeContact();
-  const heading = `Payment receipt for ${input.ticketNo}`;
-  const rows = [
-    ['Ticket', input.ticketNo],
-    ['Laptop', input.laptop],
-    ['Amount', formatTicketGhs(input.amount)],
-    ['Method', PAYMENT_METHOD_LABEL[input.method]],
-    ['Reference', input.reference || '—'],
-    ['Date', new Date(input.paidAt).toLocaleString('en-GB')],
-    ['Contact', `${contact.email} · ${contact.phone}`],
-  ];
-  const body = `<p>We received your payment.</p>
-    <table style="border-collapse:collapse;width:100%;margin-top:16px;">
-      ${rows.map(([label, value]) => `<tr>
-        <td style="padding:6px 0;color:#3A3A3A;width:120px;">${escapeHtml(label)}</td>
-        <td style="padding:6px 0;font-weight:600;">${escapeHtml(value)}</td>
-      </tr>`).join('')}
-    </table>`;
-  await sendTicketEmail(input.to, heading, emailShell(heading, body));
+  await sendTicketEmail(
+    input.to,
+    ticketReceipt({
+      ticketNo: input.ticketNo,
+      laptop: input.laptop,
+      amount: input.amount,
+      method: input.method,
+      reference: input.reference,
+      paidAt: input.paidAt,
+    })
+  );
 }
 
 export async function emailCustomerMessage(input: {
@@ -278,17 +265,7 @@ export async function emailCustomerMessage(input: {
   ticketNo: string;
   body: string;
 }): Promise<void> {
-  const heading = `New message on ${input.ticketNo}`;
-  const link = adminTicketUrl(input.ticketId);
-  if (!link) console.error('Ticket admin email has no site URL for the admin ticket link');
-  const button = link
-    ? `<p style="margin:24px 0;"><a href="${escapeHtml(link)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Open ticket</a></p>`
-    : '';
-  await sendTicketEmail(
-    adminNotificationEmail,
-    heading,
-    emailShell(heading, `<p>${escapeHtml(input.body)}</p>${button}`)
-  );
+  await sendTicketEmail(adminNotificationEmail, adminTicketMessage(input));
 }
 
 export async function signedMedia<T extends { r2_key: string }>(rows: T[]): Promise<Array<Omit<T, 'r2_key'> & { previewUrl: string }>> {

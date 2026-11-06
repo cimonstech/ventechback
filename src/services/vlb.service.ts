@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
+import { vlbApplicationReceived, vlbInvestmentActive } from '../emails';
 import { emailService, sendInvestmentEmail } from './email.service';
 import { siteOrigin } from './affiliate.service';
 import {
@@ -513,28 +514,17 @@ async function emailApplicantReceived(input: {
   uploadUrl?: string | null;
   hasAgreement: boolean;
 }) {
-  const origin = siteOrigin();
-  const uploadBlock = !input.hasAgreement && input.uploadUrl
-    ? `<p>Please upload your signed agreement so we can activate your investment.</p>
-      <p style="margin:24px 0;"><a href="${escapeHtml(input.uploadUrl)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Upload your signed agreement</a></p>
-      <p style="color:#666;font-size:12px;">This link is valid for 14 days. You can add more pages until we activate or decline the application.</p>`
-    : input.hasAgreement
-      ? '<p>We have received your signed agreement. We will contact you shortly.</p>'
-      : '<p>We will contact you shortly.</p>';
-  const html = `
-    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;max-width:600px;margin:0 auto;">
-      <h1 style="color:#FF7A19;font-size:22px;">We've received your Laptop Banking application</h1>
-      <p>Hi ${escapeHtml(input.fullName || 'there')},</p>
-      <p>Thank you for applying to VENTECH Laptop Banking.</p>
-      ${uploadBlock}
-      ${origin ? `<p><a href="${escapeHtml(`${origin}/laptop-banking`)}" style="color:#FF7A19;">View Laptop Banking</a></p>` : ''}
-      <p style="color:#666;font-size:12px;margin-top:32px;">VENTECH Gadgets</p>
-    </div>
-  `;
+  const rendered = vlbApplicationReceived({
+    firstName: input.fullName,
+    uploadUrl: input.uploadUrl,
+    hasAgreement: input.hasAgreement,
+  });
   const sent = await emailService.sendEmail({
     to: input.to,
-    subject: "We've received your Laptop Banking application",
-    html,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   }, true);
   if (!sent) {
     console.error('vlb applicant confirmation email failed');
@@ -739,44 +729,27 @@ async function emailInvestmentActive(input: {
   maturityDate: string;
   schedule: ScheduleRow[];
 }) {
-  const origin = siteOrigin();
-  const link = origin ? `${origin}/account/investments` : '/account/investments';
   const t = totals(input.schedule);
-  const rowsHtml = input.schedule
-    .map((row) => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.due_date)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.type)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">${escapeHtml(pesewasLabel(row.net_pesewas))}</td>
-      </tr>`)
-    .join('');
-  const html = `
-    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;max-width:640px;margin:0 auto;">
-      <h1 style="color:#FF7A19;font-size:22px;">Your Laptop Banking investment is active</h1>
-      <p>Hi ${escapeHtml(input.fullName || 'there')},</p>
-      <p>Your ${escapeHtml(input.planName)} investment (${escapeHtml(input.investorNo)}) is now active.</p>
-      <p><strong>Principal:</strong> ${escapeHtml(pesewasLabel(input.principalPesewas))}<br>
-         <strong>Start:</strong> ${escapeHtml(input.startDate)}<br>
-         <strong>Maturity:</strong> ${escapeHtml(input.maturityDate)}<br>
-         <strong>Total net returns:</strong> ${escapeHtml(pesewasLabel(t.total_net))}</p>
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Due</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Type</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #FF7A19;">Net</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <p style="margin:24px 0;"><a href="${escapeHtml(link)}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">View your investments</a></p>
-      <p style="color:#666;font-size:12px;">VENTECH Gadgets</p>
-    </div>
-  `;
+  const rendered = vlbInvestmentActive({
+    firstName: input.fullName,
+    planName: input.planName,
+    investorNo: input.investorNo,
+    principalPesewas: input.principalPesewas,
+    startDate: input.startDate,
+    maturityDate: input.maturityDate,
+    totalNetPesewas: t.total_net,
+    schedule: input.schedule.map((row) => ({
+      due: row.due_date,
+      type: row.type,
+      netPesewas: row.net_pesewas,
+    })),
+  });
   const sent = await emailService.sendEmail({
     to: input.to,
-    subject: 'Your Laptop Banking investment is active',
-    html,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   }, true);
   if (!sent) console.error('vlb activation email failed');
 }

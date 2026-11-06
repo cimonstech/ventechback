@@ -1,6 +1,10 @@
 import { Request } from 'express';
 import { adminNotificationEmail } from '../config/email';
-import { formatPesewas } from '../utils/money';
+import {
+  adminAffiliateWithdrawal,
+  affiliatePayoutChanged,
+  affiliateWithdrawalRequested,
+} from '../emails';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -363,16 +367,14 @@ export async function updatePayout(req: AuditReq, userId: string, input: PayoutI
   const user = await loadUser(userId);
   if (user?.email) {
     try {
+      const rendered = affiliatePayoutChanged({ firstName: displayName(user) });
       await emailService.sendEmail(
         {
           to: user.email,
-          subject: 'Your payout details were changed',
-          html: `
-            <p>Hi ${escapeHtml(displayName(user))},</p>
-            <p>Your affiliate payout details were changed. Withdrawals are held for a short period after this change.</p>
-            <p>If you did not make this change, contact support.</p>
-            <p>VENTECH Gadgets</p>
-          `,
+          subject: rendered.subject,
+          html: rendered.html,
+      text: rendered.text,
+      rendered,
         },
         false
       );
@@ -472,18 +474,19 @@ export async function requestWithdrawal(req: AuditReq, userId: string, amountPes
   });
 
   const user = await loadUser(userId);
-  const amountLabel = formatPesewas(amountPesewas);
   try {
     if (user?.email) {
+      const rendered = affiliateWithdrawalRequested({
+        firstName: displayName(user),
+        amountPesewas,
+      });
       await emailService.sendEmail(
         {
           to: user.email,
-          subject: 'Withdrawal requested',
-          html: `
-            <p>Hi ${escapeHtml(displayName(user))},</p>
-            <p>We received your withdrawal request for ${escapeHtml(amountLabel)}.</p>
-            <p>VENTECH Gadgets</p>
-          `,
+          subject: rendered.subject,
+          html: rendered.html,
+      text: rendered.text,
+      rendered,
         },
         false
       );
@@ -492,14 +495,17 @@ export async function requestWithdrawal(req: AuditReq, userId: string, amountPes
     logDb('email affiliate withdrawal', emailError);
   }
   try {
+    const adminRendered = adminAffiliateWithdrawal({
+      affiliateNo: row.affiliate_no || row.id,
+      amountPesewas,
+    });
     await emailService.sendEmail(
       {
         to: adminNotificationEmail,
-        subject: 'Affiliate withdrawal requested',
-        html: `
-          <p>An affiliate requested a withdrawal of ${escapeHtml(amountLabel)}.</p>
-          <p><strong>Affiliate:</strong> ${escapeHtml(row.affiliate_no || row.id)}</p>
-        `,
+        subject: adminRendered.subject,
+        html: adminRendered.html,
+        text: adminRendered.text,
+        rendered: adminRendered,
       },
       true
     );

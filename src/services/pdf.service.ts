@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { formatCedis, formatPesewas } from '../utils/money';
+import { formatCedisPdf, formatPesewasPdf } from '../utils/money';
 import { drawFooter, drawHeader, drawHeaderFallback, PDF_BRAND } from './pdfBrand';
 
 interface OrderData {
@@ -51,7 +51,7 @@ interface OrderData {
 }
 
 function ghsPesewas(pesewas: number): string {
-  return formatPesewas(pesewas);
+  return formatPesewasPdf(pesewas);
 }
 
 function monthLabel(date: string): string {
@@ -230,7 +230,7 @@ class PDFService {
       doc.fontSize(11).fillColor(PDF_BRAND.body);
       const lines = [
         ['Laptop', input.laptop_model],
-        ['Amount', formatCedis(Number(input.amount))],
+        ['Amount', formatCedisPdf(Number(input.amount))],
         ['Method', input.method],
         ['Reference', input.reference || '—'],
         ['Date', new Date(input.paid_at).toLocaleString('en-GB')],
@@ -361,31 +361,20 @@ class PDFService {
           reject(error);
         });
 
-        // Download logo first (async)
+        let y = 180;
         try {
-          await this.addHeader(doc, orderData);
+          y = await this.addHeader(doc, orderData);
         } catch (error) {
-          // If header fails, continue without logo
           console.warn('Failed to load logo, using text fallback:', error);
-          this.addHeaderFallback(doc, orderData);
+          y = this.addHeaderFallback(doc, orderData);
         }
-        
-        // Order Information
-        this.addOrderInfo(doc, orderData);
-        
-        // Customer Information
-        this.addCustomerInfo(doc, orderData);
-        
-        // Order Items
-        const itemsEndY = this.addOrderItems(doc, orderData);
-        this.currentY = itemsEndY;
-        
-        // Order Summary
-        const summaryEndY = this.addOrderSummary(doc, orderData);
-        this.currentY = summaryEndY;
-        
-        // Footer
-        this.addFooter(doc, this.currentY);
+
+        y = this.addOrderInfo(doc, orderData, y);
+        y = this.addCustomerInfo(doc, orderData, y);
+        y = this.addOrderItems(doc, orderData, y);
+        y = this.addOrderSummary(doc, orderData, y);
+        this.currentY = y;
+        this.addFooter(doc, y);
 
         doc.end();
       } catch (error) {
@@ -394,9 +383,9 @@ class PDFService {
     });
   }
 
-  private async addHeader(doc: any, orderData?: OrderData) {
+  private async addHeader(doc: any, orderData?: OrderData): Promise<number> {
     const docTitle = orderData?.is_pre_order ? 'PRE-ORDER INVOICE' : 'INVOICE';
-    await drawHeader(doc, docTitle, [
+    return drawHeader(doc, docTitle, [
       ['Order Number', orderData?.order_number || 'N/A'],
       ['Order Date', orderData
         ? new Date(orderData.created_at).toLocaleDateString('en-US', {
@@ -408,13 +397,12 @@ class PDFService {
     ]);
   }
 
-  private addHeaderFallback(doc: any, orderData?: OrderData) {
+  private addHeaderFallback(doc: any, orderData?: OrderData): number {
     const docTitle = orderData?.is_pre_order ? 'PRE-ORDER INVOICE' : 'ORDER INVOICE';
-    drawHeaderFallback(doc, docTitle, Boolean(orderData?.is_pre_order));
+    return drawHeaderFallback(doc, docTitle, Boolean(orderData?.is_pre_order));
   }
 
-  private addOrderInfo(doc: any, orderData: OrderData) {
-    const y = 180; // Reduced from 255
+  private addOrderInfo(doc: any, orderData: OrderData, y: number): number {
     
     // Section title with background - draw background first, then text on top
     doc.roundedRect(40, y, 515, 20, 3) // Reduced height from 25 to 20
@@ -499,10 +487,18 @@ class PDFService {
            }), 350, estimatedY + 12, { width: 150 }); // Reduced spacing
       }
     }
+
+    let bottom = contentY + 54;
+    if (orderData.is_pre_order && orderData.estimated_arrival_date) {
+      const estimatedY = orderData.pre_order_shipping_option ? contentY + 60 : contentY + 30;
+      bottom = Math.max(bottom, estimatedY + 24);
+    } else if (orderData.is_pre_order && orderData.pre_order_shipping_option) {
+      bottom = Math.max(bottom, contentY + 54);
+    }
+    return bottom + 16;
   }
 
-  private addCustomerInfo(doc: any, orderData: OrderData) {
-    const y = 250; // Reduced from 410
+  private addCustomerInfo(doc: any, orderData: OrderData, y: number): number {
     
     // Section title with background - draw background first, then text on top
     doc.roundedRect(40, y, 515, 20, 3) // Reduced height from 25 to 20
@@ -557,12 +553,17 @@ class PDFService {
        .fillColor('#666666')
        .text('Delivery Details:', 50, contentY + 84) // Reduced spacing
        .fontSize(9) // Reduced from 10
-       .fillColor('#1A1A1A')
-       .text(this.formatDeliveryDetails(orderData.shipping_address || orderData.delivery_address), 50, contentY + 95, { width: 450, lineGap: 4 }); // Increased width and lineGap for better visibility
+       .fillColor('#1A1A1A');
+
+    const details = this.formatDeliveryDetails(orderData.shipping_address || orderData.delivery_address);
+    const detailsOpts = { width: 500, lineGap: 3 };
+    const detailsY = contentY + 95;
+    const detailsHeight = doc.heightOfString(details, detailsOpts);
+    doc.text(details, 50, detailsY, detailsOpts);
+    return detailsY + detailsHeight + 18;
   }
 
-  private addOrderItems(doc: any, orderData: OrderData): number {
-    const y = 360; // Reduced from 570
+  private addOrderItems(doc: any, orderData: OrderData, y: number): number {
     
     // Section title with background - draw background first, then text on top
     doc.roundedRect(40, y, 515, 20, 3) // Reduced height from 25 to 20
@@ -597,9 +598,9 @@ class PDFService {
        .fillColor('#666666')
        .font('Helvetica-Bold')
        .text('PRODUCT', 50, tableY + 5) // Adjusted vertical position
-       .text('QTY', 335, tableY + 5, { width: 40, align: 'center' })
-       .text('UNIT PRICE', 385, tableY + 5, { width: 70, align: 'right' })
-       .text('TOTAL', 475, tableY + 5, { width: 70, align: 'right' })
+       .text('QTY', 280, tableY + 5, { width: 40, align: 'center' })
+       .text('UNIT PRICE', 325, tableY + 5, { width: 100, align: 'right' })
+       .text('TOTAL', 435, tableY + 5, { width: 115, align: 'right' })
        .font('Helvetica');
 
     // Order items with alternating background
@@ -618,15 +619,15 @@ class PDFService {
       // Product name - no pre-order badge (removed black rectangle)
       doc.fontSize(9) // Reduced from 10
          .fillColor('#1A1A1A')
-         .text(item.product_name || 'Unknown Product', 50, currentY, { width: 260, lineBreak: false, ellipsis: true });
+         .text(item.product_name || 'Unknown Product', 50, currentY, { width: 220, lineBreak: false, ellipsis: true });
       
       // Quantity, unit price, and total
       doc.fontSize(9) // Reduced from 10
          .fillColor('#1A1A1A')
-         .text((item.quantity || 0).toString(), 335, currentY, { width: 40, align: 'center' })
-         .text(formatCedis(item.unit_price || 0), 385, currentY, { width: 70, align: 'right' })
+         .text((item.quantity || 0).toString(), 280, currentY, { width: 40, align: 'center' })
+         .text(formatCedisPdf(item.unit_price || 0), 325, currentY, { width: 100, align: 'right', lineBreak: false })
          .font('Helvetica-Bold')
-         .text(formatCedis(itemTotal), 475, currentY, { width: 70, align: 'right' })
+         .text(formatCedisPdf(itemTotal), 435, currentY, { width: 115, align: 'right', lineBreak: false })
          .font('Helvetica');
       
       currentY += 22; // Reduced from 28
@@ -636,17 +637,8 @@ class PDFService {
     return currentY;
   }
 
-  private addOrderSummary(doc: any, orderData: OrderData): number {
-    // Calculate dynamic Y position based on number of items
-    const items = orderData.order_items || (orderData as any).items || [];
-    const itemCount = items.length;
-    const baseY = 360; // Start of items section (reduced from 570)
-    const headerHeight = 48; // Section title + table header (reduced from 65)
-    const itemHeight = 22; // Height per item (reduced from 28)
-    const y = baseY + headerHeight + (itemCount * itemHeight) + 20; // Reduced spacing
-    
-    // No page break - everything on one page
-    return this.addSummaryOnPage(doc, orderData, y);
+  private addOrderSummary(doc: any, orderData: OrderData, y: number): number {
+    return this.addSummaryOnPage(doc, orderData, y + 12);
   }
 
   private addSummaryOnPage(doc: any, orderData: OrderData, y: number): number {
@@ -657,20 +649,20 @@ class PDFService {
     // Calculate required height based on number of summary items
     const summaryItems: Array<[string, string]> = [];
     
-    summaryItems.push(['Subtotal:', formatCedis(orderData.subtotal)]);
+    summaryItems.push(['Subtotal:', formatCedisPdf(orderData.subtotal)]);
     
     if (orderData.discount > 0) {
-      summaryItems.push(['Discount:', `-${formatCedis(orderData.discount)}`]);
+      summaryItems.push(['Discount:', `-${formatCedisPdf(orderData.discount)}`]);
     }
     
     if (orderData.tax > 0) {
-      summaryItems.push(['Tax:', formatCedis(orderData.tax)]);
+      summaryItems.push(['Tax:', formatCedisPdf(orderData.tax)]);
     }
     
     const shippingFee = orderData.shipping_fee || orderData.delivery_fee || 0;
     if (shippingFee > 0) {
       const shippingLabel = orderData.is_pre_order ? 'Shipment:' : 'Delivery:';
-      summaryItems.push([shippingLabel, formatCedis(shippingFee)]);
+      summaryItems.push([shippingLabel, formatCedisPdf(shippingFee)]);
     }
 
     // Calculate box height: padding (15 top + 15 bottom) + items (16 each) + divider (3) + total (26) + spacing (10)
@@ -689,7 +681,7 @@ class PDFService {
          .fillColor('#666666')
          .text(label, summaryX + 15, currentY)
          .fillColor('#1A1A1A')
-         .text(value, summaryX + 15, currentY, { width: summaryWidth - 30, align: 'right' });
+         .text(value, summaryX + 15, currentY, { width: summaryWidth - 30, align: 'right', lineBreak: false });
       currentY += 14; // Reduced from 16
     });
 
@@ -709,7 +701,7 @@ class PDFService {
        .fillColor('#FFFFFF')
        .font('Helvetica-Bold')
        .text('TOTAL:', summaryX + 20, totalY + 6) // Adjusted vertical position
-       .text(formatCedis(orderData.total), summaryX + 20, totalY + 6, { width: summaryWidth - 40, align: 'right' })
+         .text(formatCedisPdf(orderData.total), summaryX + 20, totalY + 6, { width: summaryWidth - 40, align: 'right', lineBreak: false })
        .font('Helvetica');
     
     // Return the Y position after the summary box

@@ -1,5 +1,10 @@
 import { Request } from 'express';
 import { adminNotificationEmail } from '../config/email';
+import {
+  vlbPayoutDetailsChanged,
+  vlbRenewalChoiceAdmin,
+  vlbUpgradeRequestAdmin,
+} from '../emails';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
 import { emailService } from './email.service';
@@ -454,19 +459,18 @@ export async function chooseRenewal(
   });
 
   const user = await loadUser(userId);
-  const html = `
-    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;">
-      <h2 style="color:#FF7A19;">Laptop Banking renewal choice</h2>
-      <p><strong>Investor:</strong> ${escapeHtml(investor.investor_no || investor.id)}</p>
-      <p><strong>Name:</strong> ${escapeHtml(displayName(user))}</p>
-      <p><strong>Investment:</strong> ${escapeHtml(investment.id)}</p>
-      <p><strong>Choice:</strong> ${escapeHtml(choice)}</p>
-    </div>
-  `;
+  const rendered = vlbRenewalChoiceAdmin({
+    investorNo: investor.investor_no || investor.id,
+    name: displayName(user),
+    investmentId: investment.id,
+    choice,
+  });
   const sent = await emailService.sendEmail({
     to: adminNotificationEmail,
-    subject: `Laptop Banking renewal: ${choice}`,
-    html,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   }, true);
   if (!sent) console.error('vlb renewal store email failed');
 
@@ -524,18 +528,18 @@ export async function createUpgradeRequest(
   });
 
   const user = await loadUser(userId);
+  const rendered = vlbUpgradeRequestAdmin({
+    investorNo: investor.investor_no || investor.id,
+    name: displayName(user),
+    planName: plan.name,
+    message: input.message,
+  });
   const sent = await emailService.sendEmail({
     to: adminNotificationEmail,
-    subject: 'Laptop Banking upgrade request',
-    html: `
-      <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;">
-        <h2 style="color:#FF7A19;">Laptop Banking upgrade request</h2>
-        <p><strong>Investor:</strong> ${escapeHtml(investor.investor_no || investor.id)}</p>
-        <p><strong>Name:</strong> ${escapeHtml(displayName(user))}</p>
-        <p><strong>Requested plan:</strong> ${escapeHtml(plan.name)}</p>
-        ${input.message ? `<p>${escapeHtml(input.message)}</p>` : ''}
-      </div>
-    `,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   }, true);
   if (!sent) console.error('vlb upgrade store email failed');
 
@@ -914,24 +918,16 @@ async function savePayoutDetails(
 
   const user = await loadUser(row.user_id);
   if (user?.email) {
+    const rendered = vlbPayoutDetailsChanged({
+      firstName: displayName(user),
+      byStaff: Boolean(options.staff),
+    });
     const sent = await emailService.sendEmail({
       to: user.email,
-      subject: options.staff
-        ? 'Your payout details were updated by VENTECH'
-        : 'Your payout details were changed',
-      html: options.staff
-        ? `
-        <p>Hi ${escapeHtml(displayName(user))},</p>
-        <p>Your payout details were updated by VENTECH.</p>
-        <p>If you did not expect this change, contact VENTECH support.</p>
-        <p>VENTECH Gadgets</p>
-      `
-        : `
-        <p>Hi ${escapeHtml(displayName(user))},</p>
-        <p>Your Laptop Banking payout details were changed.</p>
-        <p>If you did not make this change, contact support.</p>
-        <p>VENTECH Gadgets</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     }, false);
     if (!sent) console.error('vlb payout changed email failed');
   }

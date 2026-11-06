@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { supabaseAdmin } from '../utils/supabaseClient';
+import { deviceClaimCode, deviceOwnerLinked, deviceRegistered } from '../emails';
 import { emailService } from './email.service';
 
 export type WarrantyState = {
@@ -315,24 +316,18 @@ export async function sendDeviceRegistrationEmail(input: {
     return;
   }
 
-  const items = input.devices.map((device) => {
-    const url = `${site}/d/${encodeURIComponent(device.qr_token)}`;
-    return `<p style="margin:0 0 8px;font-size:16px;"><strong>${escapeHtml(device.model_name)}</strong></p>
-      <p style="margin:0 0 24px;"><a href="${url}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">View your laptop</a></p>`;
-  }).join('');
-
-  const html = `<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;margin:0 auto;padding:24px;">
-    <h1 style="font-size:22px;margin:0 0 16px;">Your VENTECH laptop is registered</h1>
-    <p>Hi ${escapeHtml(input.customerName || 'there')},</p>
-    <p>Your laptop is now registered with VENTECH.</p>
-    ${items}
-  </div>`;
+  const rendered = deviceRegistered({
+    firstName: input.customerName || undefined,
+    devices: input.devices,
+  });
 
   try {
     const sent = await emailService.sendEmail({
       to: input.to,
-      subject: 'Your VENTECH laptop is registered',
-      html,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     });
     if (!sent) {
       console.error('Device registration email was not sent');
@@ -357,18 +352,18 @@ export async function sendOwnerLinkedEmail(input: {
     return;
   }
 
-  const url = `${site}/d/${encodeURIComponent(input.qrToken)}`;
-  const html = `<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;margin:0 auto;padding:24px;">
-    <h1 style="font-size:22px;margin:0 0 16px;">A VENTECH laptop has been added to your account</h1>
-    <p style="margin:0 0 8px;font-size:16px;"><strong>${escapeHtml(input.modelName)}</strong></p>
-    <p style="margin:0 0 24px;"><a href="${url}" style="display:inline-block;background:#FF7A19;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">View your laptop</a></p>
-  </div>`;
+  const rendered = deviceOwnerLinked({
+    modelName: input.modelName,
+    qrToken: input.qrToken,
+  });
 
   try {
     const sent = await emailService.sendEmail({
       to: input.to,
-      subject: 'A VENTECH laptop has been added to your account',
-      html,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     });
     if (!sent) {
       console.error('Owner linked email was not sent');
@@ -379,16 +374,12 @@ export async function sendOwnerLinkedEmail(input: {
 }
 
 export async function sendClaimCodeEmail(to: string, code: string): Promise<boolean> {
-  const html = `<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;margin:0 auto;padding:24px;">
-    <h1 style="font-size:22px;margin:0 0 16px;">Your VENTECH claim code</h1>
-    <p>Use this code to add the laptop to your VENTECH account. It expires in 10 minutes.</p>
-    <p style="font-size:32px;letter-spacing:6px;font-weight:700;margin:24px 0;">${escapeHtml(code)}</p>
-    <p>If you did not request this, you can ignore this email.</p>
-  </div>`;
-
+  const rendered = deviceClaimCode({ code });
   return emailService.sendEmail({
     to,
-    subject: 'Your VENTECH claim code',
-    html,
+    subject: rendered.subject,
+    html: rendered.html,
+      text: rendered.text,
+      rendered,
   });
 }

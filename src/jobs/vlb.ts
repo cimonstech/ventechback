@@ -1,5 +1,12 @@
 import { adminNotificationEmail } from '../config/email';
-import { siteOrigin } from '../services/affiliate.service';
+import {
+  vlbAdminPayoutsDue,
+  vlbAdminSettlement,
+  vlbPayoutDue,
+  vlbRenewalNudge,
+  vlbSettlement,
+  type RenderedEmail,
+} from '../emails';
 import { emailService } from '../services/email.service';
 import { markDuePayouts, moveToSettlement } from '../services/vlb.service';
 import {
@@ -9,7 +16,6 @@ import {
   termProgress,
   todayAccra,
 } from '../services/vlbCalc.service';
-import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { claimJobRun, finishJobRun } from './lock';
 
@@ -55,52 +61,23 @@ function errorText(error: unknown): string {
   return 'Job failed.';
 }
 
-function ghs(pesewas: number): string {
-  return formatPesewas(pesewas);
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function displayName(user: UserLite | null): string {
   if (!user) return 'there';
   return user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ') || 'there';
 }
 
-function formatAccraDate(isoDate: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(new Date(`${isoDate}T00:00:00Z`));
-}
-
-function investmentsUrl(id?: string): string | null {
-  const origin = siteOrigin();
-  if (!origin) return null;
-  return id ? `${origin}/account/investments/${id}` : `${origin}/account/investments`;
-}
-
-function wrapHtml(title: string, body: string): string {
-  return `
-    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;max-width:640px;margin:0 auto;">
-      <h1 style="color:#FF7A19;font-size:22px;">${escapeHtml(title)}</h1>
-      ${body}
-      <p style="color:#666;font-size:12px;margin-top:32px;">VENTECH Gadgets</p>
-    </div>
-  `;
-}
-
-async function send(to: string, subject: string, html: string): Promise<boolean> {
-  const sent = await emailService.sendEmail({ to, subject, html }, true);
-  if (!sent) console.error(`[jobs] vlb email failed subject=${subject} to=${to}`);
+async function send(to: string, rendered: RenderedEmail): Promise<boolean> {
+  const sent = await emailService.sendEmail(
+    {
+      to,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
+    },
+    true
+  );
+  if (!sent) console.error(`[jobs] vlb email failed subject=${rendered.subject} to=${to}`);
   return sent;
 }
 
@@ -211,15 +188,12 @@ async function emailPayoutDue(
   const user = investor?.user || null;
   const email = user?.email;
   if (!email) return;
-  const amount = ghs(payout.net_pesewas);
-  const link = investmentsUrl(investment?.id);
-  const body = `
-    <p>Hi ${escapeHtml(displayName(user))},</p>
-    <p>Your payout of ${escapeHtml(amount)} is due today.</p>
-    <p>We will process it to your saved payout details.</p>
-    ${link ? `<p><a href="${escapeHtml(link)}" style="color:#FF7A19;">View your investments</a></p>` : ''}
-  `;
-  const sent = await send(email, `Your payout of ${amount} is due today`, wrapHtml('Payout due today', body));
+  const rendered = vlbPayoutDue({
+    firstName: displayName(user),
+    amountPesewas: payout.net_pesewas,
+    investmentId: investment?.id,
+  });
+  const sent = await send(email, rendered);
   if (!sent) throw new Error('Could not email this investor.');
 }
 
@@ -230,18 +204,12 @@ async function emailSettlementInvestor(
   const user = investor?.user || null;
   const email = user?.email;
   if (!email) return;
-  const link = investmentsUrl(investment.id);
-  const body = `
-    <p>Hi ${escapeHtml(displayName(user))},</p>
-    <p>Your Laptop Banking investment of ${escapeHtml(ghs(investment.principal_pesewas))} has entered its settlement month.</p>
-    <p>Choose to settle or renew in your account. If you do not choose, your principal will be paid out.</p>
-    ${link ? `<p><a href="${escapeHtml(link)}" style="color:#FF7A19;">Choose settle or renew</a></p>` : ''}
-  `;
-  const sent = await send(
-    email,
-    'Your Laptop Banking investment is in settlement',
-    wrapHtml('Settlement month', body)
-  );
+  const rendered = vlbSettlement({
+    firstName: displayName(user),
+    principalPesewas: investment.principal_pesewas,
+    investmentId: investment.id,
+  });
+  const sent = await send(email, rendered);
   if (!sent) throw new Error('Could not email this investor.');
 }
 
@@ -253,57 +221,32 @@ async function emailRenewalNudge(
   const user = investor?.user || null;
   const email = user?.email;
   if (!email) return;
-  const deadline = formatAccraDate(chooseBy);
-  const link = investmentsUrl(investment.id);
-  const body = `
-    <p>Hi ${escapeHtml(displayName(user))},</p>
-    <p>Choose to settle or renew by ${escapeHtml(deadline)}; if you don't choose, your principal will be paid out.</p>
-    ${link ? `<p><a href="${escapeHtml(link)}" style="color:#FF7A19;">Choose settle or renew</a></p>` : ''}
-  `;
-  const sent = await send(
-    email,
-    `Choose to settle or renew by ${deadline}`,
-    wrapHtml('Choose settle or renew', body)
-  );
+  const rendered = vlbRenewalNudge({
+    firstName: displayName(user),
+    chooseBy,
+    investmentId: investment.id,
+  });
+  const sent = await send(email, rendered);
   if (!sent) throw new Error('Could not email this investor.');
 }
 
-function payoutAdminHtml(today: string, rows: Array<{
+function payoutAdminEmail(today: string, rows: Array<{
   investorNo: string;
   name: string;
   type: string;
   dueDate: string;
   amount: number;
-}>): string {
-  const total = rows.reduce((sum, row) => sum + row.amount, 0);
-  const items = rows
-    .map((row) => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.investorNo)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.name)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.type)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${escapeHtml(row.dueDate)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">${escapeHtml(ghs(row.amount))}</td>
-      </tr>`)
-    .join('');
-  return wrapHtml(
-    'Laptop Banking payouts due today',
-    `
-      <p>${rows.length} payout${rows.length === 1 ? '' : 's'} due on ${escapeHtml(today)}. Total net: <strong>${escapeHtml(ghs(total))}</strong>.</p>
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Investor</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Name</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Type</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #FF7A19;">Due</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #FF7A19;">Net</th>
-          </tr>
-        </thead>
-        <tbody>${items}</tbody>
-      </table>
-    `
-  );
+}>) {
+  return vlbAdminPayoutsDue({
+    today,
+    rows: rows.map((row) => ({
+      investorNo: row.investorNo,
+      name: row.name,
+      type: row.type,
+      dueDate: row.dueDate,
+      amountPesewas: row.amount,
+    })),
+  });
 }
 
 export async function runVlbPayoutsDue(): Promise<Record<string, number>> {
@@ -340,13 +283,9 @@ export async function runVlbPayoutsDue(): Promise<Record<string, number>> {
         amount: payout.net_pesewas,
       };
     });
-    const total = adminRows.reduce((sum, row) => sum + row.amount, 0);
     const adminResult = await once('vlb-payouts-due-admin', today, async () => {
-      const sent = await send(
-        adminNotificationEmail,
-        `Laptop Banking: ${dueToday.length} payout${dueToday.length === 1 ? '' : 's'} due today (${ghs(total)})`,
-        payoutAdminHtml(today, adminRows)
-      );
+      const rendered = payoutAdminEmail(today, adminRows);
+      const sent = await send(adminNotificationEmail, rendered);
       if (!sent) throw new Error('Could not email the admin summary.');
     });
     if (adminResult === 'sent') counts.admin_emailed = 1;
@@ -384,21 +323,18 @@ export async function runVlbSettlement(): Promise<Record<string, number>> {
   }
 
   if (rows.length) {
-    const items = rows
-      .map((investment) => {
-        const investor = investors.get(investment.investor_id);
-        return `<li>${escapeHtml(investor?.investor_no || investment.id)} — ${escapeHtml(displayName(investor?.user || null))} — ${escapeHtml(ghs(investment.principal_pesewas))}</li>`;
-      })
-      .join('');
     const adminResult = await once('vlb-settlement-admin', today, async () => {
-      const sent = await send(
-        adminNotificationEmail,
-        `Laptop Banking: ${rows.length} investment${rows.length === 1 ? '' : 's'} entered settlement`,
-        wrapHtml(
-          'Laptop Banking settlement',
-          `<p>These investments entered the settlement month today:</p><ul>${items}</ul>`
-        )
-      );
+      const rendered = vlbAdminSettlement({
+        rows: rows.map((investment) => {
+          const investor = investors.get(investment.investor_id);
+          return {
+            investorNo: investor?.investor_no || investment.id,
+            name: displayName(investor?.user || null),
+            principalPesewas: investment.principal_pesewas,
+          };
+        }),
+      });
+      const sent = await send(adminNotificationEmail, rendered);
       if (!sent) throw new Error('Could not email the admin summary.');
     });
     if (adminResult === 'sent') counts.admin_emailed = 1;

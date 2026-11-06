@@ -1,4 +1,5 @@
 import { adminNotificationEmail } from '../config/email';
+import { adminDigest } from '../emails';
 import { emailService } from '../services/email.service';
 import { addDays, todayAccra } from '../services/vlbCalc.service';
 import { supabaseAdmin } from '../utils/supabaseClient';
@@ -127,24 +128,24 @@ export async function sendAdminDigest(): Promise<Record<string, number>> {
     return { ...counts, emailed: 0 };
   }
 
+  const rendered = adminDigest({
+    commissionsReady,
+    openWithdrawals,
+    applicationsPending,
+    staleServiceRequests,
+    vlbPayoutsDueWeek,
+    vlbInSettlement,
+    vlbNewApplications,
+    awaitingSerialCount,
+    oldestOrders,
+  });
   const sent = await emailService.sendEmail(
     {
       to: adminNotificationEmail,
-      subject: 'Daily operations summary',
-      html: `
-        <p>Items that need attention:</p>
-        <ul>
-          <li>Commissions ready to verify: ${commissionsReady}</li>
-          <li>Open withdrawals: ${openWithdrawals}</li>
-          <li>Applications pending: ${applicationsPending}</li>
-          <li>Service requests older than 7 days: ${staleServiceRequests}</li>
-          <li>Laptop Banking payouts due this week: ${vlbPayoutsDueWeek}</li>
-          <li>Laptop Banking investments in settlement: ${vlbInSettlement}</li>
-          <li>Laptop Banking new applications: ${vlbNewApplications}</li>
-          <li>Laptops awaiting serial for more than 2 days: ${awaitingSerialCount}${oldestOrders.length ? ` (oldest: ${oldestOrders.join(', ')})` : ''}</li>
-        </ul>
-        <p>VENTECH Gadgets</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     },
     true
   );

@@ -4,6 +4,7 @@ import { adminNotificationEmail } from '../config/email';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
+import { adminNewAffiliate, affiliateFeeReceived } from '../emails';
 import { emailService } from './email.service';
 import { affiliateSettings } from './affiliateSettings.service';
 import { initializePaystackTransaction, verifyPaystackTransaction } from './paystackClient';
@@ -279,16 +280,14 @@ async function emailApplicantPaid(userId: string) {
   const user = await loadUserContact(userId);
   if (!user?.email) return;
   const name = user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ') || 'there';
+  const rendered = affiliateFeeReceived({ firstName: name });
   await emailService.sendEmail(
     {
       to: user.email,
-      subject: 'Payment received, your application is under review',
-      html: `
-        <p>Hi ${escapeHtml(name)},</p>
-        <p>We received your affiliate application fee. Your application is under review.</p>
-        <p>We will email you when a decision is ready.</p>
-        <p>VENTECH Gadgets</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     },
     false
   );
@@ -297,17 +296,19 @@ async function emailApplicantPaid(userId: string) {
 async function emailAdminNewApplication(userId: string, affiliate: AffiliateRow) {
   const user = await loadUserContact(userId);
   const name = user?.full_name || [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Applicant';
+  const rendered = adminNewAffiliate({
+    name,
+    email: user?.email || 'unknown',
+    affiliateId: affiliate.id,
+    status: affiliate.status,
+  });
   await emailService.sendEmail(
     {
       to: adminNotificationEmail,
-      subject: 'New affiliate application',
-      html: `
-        <p>A new affiliate application is ready for review.</p>
-        <p><strong>Name:</strong> ${escapeHtml(name)}</p>
-        <p><strong>Email:</strong> ${escapeHtml(user?.email || 'unknown')}</p>
-        <p><strong>Affiliate id:</strong> ${escapeHtml(affiliate.id)}</p>
-        <p><strong>Status:</strong> ${escapeHtml(affiliate.status)}</p>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     },
     true
   );

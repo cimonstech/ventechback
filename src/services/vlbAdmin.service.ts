@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
+import { vlbPayoutPaid } from '../emails';
 import { formatPesewas } from '../utils/money';
 import { supabaseAdmin } from '../utils/supabaseClient';
 import { logAudit } from './audit.service';
@@ -612,22 +613,21 @@ export async function markPayoutPaid(
   const user = await loadUser(investor.user_id);
   if (user?.email) {
     const periodLabel = payout.type === 'principal' ? 'principal repayment' : `period ${payout.period_no}`;
+    const rendered = vlbPayoutPaid({
+      firstName: displayName(user),
+      netPesewas: Number(payout.net_pesewas),
+      grossPesewas: Number(payout.gross_pesewas),
+      scholarPesewas: Number(payout.scholar_pesewas),
+      periodLabel,
+      method: input.method,
+      reference: input.reference,
+    });
     const sent = await emailService.sendEmail({
       to: user.email,
-      subject: `Payment sent: ${pesewasLabel(Number(payout.net_pesewas))} (net) for ${periodLabel}`,
-      html: `
-        <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1A1A1A;">
-          <h2 style="color:#FF7A19;">Payment sent</h2>
-          <p>Hi ${escapeHtml(displayName(user))},</p>
-          <p>We sent ${escapeHtml(pesewasLabel(Number(payout.net_pesewas)))} (net) for ${escapeHtml(periodLabel)}.</p>
-          <p><strong>Gross:</strong> ${escapeHtml(pesewasLabel(Number(payout.gross_pesewas)))}<br>
-             <strong>Scholar Fund:</strong> ${escapeHtml(pesewasLabel(Number(payout.scholar_pesewas)))}<br>
-             <strong>Net:</strong> ${escapeHtml(pesewasLabel(Number(payout.net_pesewas)))}</p>
-          <p><strong>Method:</strong> ${escapeHtml(input.method)}<br>
-             <strong>Reference:</strong> ${escapeHtml(input.reference)}</p>
-          <p>VENTECH Gadgets</p>
-        </div>
-      `,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+      rendered,
     }, true);
     if (!sent) console.error('vlb payment sent email failed');
   }
